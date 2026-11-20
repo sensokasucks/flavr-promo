@@ -1,0 +1,7 @@
+# FlaVR Bot runtime (Python 3.12). aiohttp comes with discord.py.
+discord.py==2.5.2
+# zoneinfo needs time zone data; slim Docker images don't ship it
+tzdata==2025.2
+# the weekly calendar picture: a headless Chromium draws flavrpromo/render.py's page
+# (the Docker image installs the browser with "playwright install --with-deps chromium")
+playwright==1.49.1

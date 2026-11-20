@@ -1,0 +1,40 @@
+# FlaVR Promo stack. Portainer: Stacks → Add stack → Repository → this repo, compose path
+# docker-compose.yml; put the settings from .env.example under "Environment variables".
+# Full steps: docs/PORTAINER.md.
+services:
+  flavr-promo:
+    build: .
+    image: flavr-promo:latest
+    # always build here from this repo; never try to download "flavr-promo" from Docker Hub (it isn't
+    # there). Without this, Portainer's "Re-pull image" on redeploy fails with "pull access denied".
+    pull_policy: build
+    container_name: flavr-promo
+    restart: unless-stopped
+    # host network: phones and OBS on the home network reach the pages at this PC's own address
+    # (port LISTEN_PORT, default 3871; FlaVR Bot keeps 3870)
+    network_mode: host
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:-}
+      OWNER_ID: ${OWNER_ID:-}
+      GUILD_ID: ${GUILD_ID:-}
+      LISTEN_PORT: ${LISTEN_PORT:-3871}
+      WEB_ADDRESS: ${WEB_ADDRESS:-}
+      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID:-}
+      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:-}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      KICK_CLIENT_ID: ${KICK_CLIENT_ID:-}
+      KICK_CLIENT_SECRET: ${KICK_CLIENT_SECRET:-}
+      TZ: ${TZ:-America/New_York}
+      QUIET_HOURS: ${QUIET_HOURS:-3-11}
+      CALENDAR_PREVIEW_HOUR: ${CALENDAR_PREVIEW_HOUR:-10}
+      CHROMIUM_PATH: ${CHROMIUM_PATH:-}
+      PROMO_WEEKLY_LIMIT: ${PROMO_WEEKLY_LIMIT:-7}
+      PROMO_WAIT_HOURS: ${PROMO_WAIT_HOURS:-6}
+    volumes:
+      - flavr-promo-data:/data
+      # FlaVR Bot's data folder, read-only, for the one-time copy on the first start
+      # (flavrpromo/import_old.py). IMPORT_DIR empty = ./import, an empty folder in this repo.
+      - ${IMPORT_DIR:-./import}:/import:ro
+
+volumes:
+  flavr-promo-data:
