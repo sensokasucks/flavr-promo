@@ -15,6 +15,11 @@ and the owner's own text sections. For each section the owner can:
     the regular / chibi switch: which one is big and which one peeks), the desk card (regular or
     chibi), any one of the host's pictures on its own, or none. Card pictures are drawn with
     Chromium like the review cards (flavrpromo/host_cards.py).
+Day pictures come in the host's look by default (owner 2026-11-21: the board-look day pictures
+"dont follow the color scheme and fancy format the hosts come in with"): host_cards.day draws
+Colette's taped polaroids or Clark's filed photos, with the host's line about that day (picked from
+hosts.day_line, editable per day, ↻ for another). "Board look" at the top switches back to
+render.day_card (/calendar/day.png). Drafts: p["day_look"] "host" / "board", p["day_lines"] {day: line}.
 "Open the finished article" shows it on the copy page (flavrpromo/web.py ``article_html``): the host
 pictures sit in Save blocks like the day pictures (X can't fetch pictures from the home network).
 
@@ -30,13 +35,16 @@ from __future__ import annotations
 
 import html
 import random
+import re
 import time
+from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 from aiohttp import web
 
-from . import groups, host_picker, hosts
+from . import groups, host_cards, host_picker, hosts
+from .render import clock
 from .settings_page import _e, frame
 from .web import article_html, article_query, build_article, get_week
 
@@ -100,8 +108,25 @@ async def new_draft(poster: Any, group: str, which: str, host: str = "") -> Dict
          "sections": [{"id": "intro", "title": HOST_SECTIONS["intro"], "on": True}]
          + [dict(s, on=True) for s in a["sections"]]
          + [{"id": "outro", "title": HOST_SECTIONS["outro"], "on": True}]}
+    p["day_look"], p["day_lines"] = "host", {}
     _host_lines(p)
+    _day_lines(p, week)
     return p
+
+
+def _day_lines(p: Dict[str, Any], week: Any, only: str = "") -> None:
+    """The host's line for each day picture (hosts.day_line with that day's first stream); ``only``:
+    just that day's index (its Regen), else every day (a new draft, a new host, Regen all)."""
+    lines = p.setdefault("day_lines", {})
+    for i, tiles in enumerate(week.days):
+        if (only and str(i) != only) or not tiles:
+            continue
+        first = min(tiles, key=lambda t: t.at)
+        date = week.start + timedelta(days=i)
+        # hosts.day_line's own blanks, but "on Tuesday" for {when_lower} (its day posts say "today")
+        facts = {"when": f"{date:%A}", "when_lower": f"on {date:%A}", "count": len(tiles),
+                 "first_name": first.name, "first_time": clock(first.at, week.tz)}
+        lines[str(i)] = hosts.one(p["host"], "day_one" if len(tiles) == 1 else "day_many", facts, "day_many")
 
 
 def _refresh(p: Dict[str, Any], a: Dict[str, Any], only: str = "") -> str:
@@ -161,6 +186,10 @@ def section_html(dkey: str, p: Dict[str, Any], s: Dict[str, Any]) -> str:
         rows = [x for x in rows if x]
         return block + "".join(f"<p>{who if i == 0 else ''}{'<i>' if i == len(rows) - 1 and i else ''}{e(x)}"
                                f"{'</i>' if i == len(rows) - 1 and i else ''}</p>" for i, x in enumerate(rows))
+    if sid.startswith("day") and p.get("day_look", "host") == "host":
+        # the snapshot's board-look day picture (/calendar/day.png...day=N) → the host's look
+        url = f"/settings/article/day?d={quote(dkey)}&day={sid[3:]}&t={int(p.get('saved_at') or 0)}"
+        return re.sub(r'/calendar/day\.png[^"]*?day=\d', html.escape(url, quote=True), s.get("html") or "")
     if sid in (p.get("texts") or {}):
         paras = [x.strip() for x in str(p["texts"][sid]).split("\n\n") if x.strip()]
         return "".join(f"<p>{html.escape(x).replace(chr(10), '<br>')}</p>" for x in paras)
@@ -236,7 +265,12 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
                    f'<button name=action value="down:{sid}" class=alt{" disabled" if i == last else ""}>↓</button> ')
         if kind == "calendar":
             buttons += f'<button name=action value="regen:{sid}">↻ Regen from the calendar</button>'
-            body = f'<div class=box>{s.get("html") or ""}</div>'
+            line = ""
+            if sid.startswith("day") and p.get("day_look", "host") == "host":
+                line = (f'<label>{_e(hosts.HOSTS[p["host"]]["name"])}\'s line on this picture '
+                        f'<input name="dayline_{sid[3:]}" value="{_e((p.get("day_lines") or {}).get(sid[3:], ""))}" '
+                        f'maxlength=200 style="width:100%"><small>Empty = no bubble. ↻ Regen also picks another line.</small></label>')
+            body = line + f'<div class=box>{section_html(dkey, p, s)}</div>'
         elif kind == "host":
             buttons += f'<button name=action value="regen:{sid}">↻ New lines</button>'
             body = _host_controls(dkey, p, sid, ai_on) + f'<div class=box>{section_html(dkey, p, s)}</div>'
@@ -252,8 +286,12 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
     ai_note = (f'<p class=ai>✨ KoboldCpp: {_e(host_picker.AI_STATES.get(p.get("ai_state") or "", "ready"))}</p>'
                if ai_on else '<p class=help>Set a KoboldCpp address on <a href="/settings#kobold">Settings</a> for ✨ lines.</p>')
     built = time.strftime("%H:%M", time.localtime(float(p.get("built_at") or 0)))
+    look = p.get("day_look", "host")
+    lopts = "".join(f'<option value="{v}"{" selected" if v == look else ""}>{_e(n)}</option>'
+                    for v, n in (("host", "In the host's look (with their line)"), ("board", "Board look")))
     head = (f'<p>Host <select name=host>{hopts}</select> <button name=action value=host class=alt>Change host</button> '
-            f'<small>Changing the host gives new lines for both host sections.</small></p>{ai_note}'
+            f'<small>Changing the host gives new lines for both host sections and the day pictures.</small></p>'
+            f'<p>Day pictures <select name=day_look>{lopts}</select> <button name=action value=save class=alt>Apply</button></p>{ai_note}'
             f'<p class=help>Calendar sections are as of {built}. <button name=action value=regen_all class=alt>↻ Regen every '
             f'calendar section</button> <button name=action value=add_text class=alt>+ Add a text section</button> '
             f'<button name=action value=reset class=alt>Start over</button></p>')
@@ -304,6 +342,11 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
     if "pose" in form:
         v = str(form.get("pose") or "")
         p["pose"] = v if v in hosts.POSES else ""
+    if str(form.get("day_look") or "") in ("host", "board"):
+        p["day_look"] = str(form.get("day_look"))
+    for i in range(7):
+        if f"dayline_{i}" in form:
+            p.setdefault("day_lines", {})[str(i)] = " ".join(str(form.get(f"dayline_{i}") or "").split())[:200]
     for sid in list(p.get("texts") or {}):
         if f"text_{sid}" in form:
             p["texts"][sid] = str(form.get(f"text_{sid}") or "").replace("\r\n", "\n").strip()[:MAX_TEXT]
@@ -371,6 +414,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
                 p["host"], p["ai"], p["picks"] = new, [], {}
                 p["candidates"] = {}
                 _host_lines(p)
+                week, _ = await _article(poster, p)
+                _day_lines(p, week)                 # the day pictures' lines in the new host's voice
                 note = f"{hosts.HOSTS[new]['name']} presents this one now."
         elif verb == "regen" and sid in HOST_SECTIONS:
             _host_lines(p, shuffle=True, only=SLOTS[sid])
@@ -378,6 +423,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
         elif verb in ("regen", "regen_all"):
             week, a = await _article(poster, p)
             note = _refresh(p, a, sid if verb == "regen" else "")
+            if sid.startswith("day") or verb == "regen_all":
+                _day_lines(p, week, sid[3:] if verb == "regen" else "")
             if verb == "regen_all":         # the facts (and so the host lines' numbers) may have moved too
                 p["facts"] = hosts.facts(store, week)
                 p["notes"] = hosts.notes(p["facts"])
@@ -410,6 +457,24 @@ def add_routes(app: web.Application, poster: Any) -> None:
             raise web.HTTPNotFound()
         return web.FileResponse(path, headers={"Cache-Control": "no-store"})
 
+    async def day_picture(request: web.Request) -> web.Response:
+        """A day picture in the host's look (host_cards.day), with the draft's line for that day."""
+        dkey = request.query.get("d", "")
+        p = store.get(dkey) if dkey.startswith(PREFIX) else None
+        try:
+            i = int(request.query.get("day", ""))
+        except ValueError:
+            raise web.HTTPNotFound()
+        if not p or not 0 <= i <= 6:
+            raise web.HTTPNotFound()
+        if poster.shooter is None:
+            raise web.HTTPServiceUnavailable(text="No Chromium for pictures.")
+        week, _ = await _article(poster, p)
+        await poster.images.fetch_all(week)         # the stream thumbnails, cached like the board's
+        png = await poster.shooter.png(host_cards.day(p["host"], week, i, poster.images.data_url,
+                                                      (p.get("day_lines") or {}).get(str(i), "")))
+        return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
+
     async def view(request: web.Request) -> web.Response:
         """The finished article on the copy page (flavrpromo/web.py ``article_html``)."""
         dkey = request.query.get("d", "")
@@ -422,7 +487,9 @@ def add_routes(app: web.Application, poster: Any) -> None:
         q = article_query(p["group"], p.get("label") or "", int(p.get("off") or 0))
         back = (f'<p class="tip"><a style="color:#2ae0d4" href="/settings/article?group={quote(p["group"])}'
                 f'&which={quote(p["which"])}">← back to the article editor</a></p>')
-        return web.Response(text=article_html(out, "/calendar.png" + q, "/calendar/article.zip" + q,
+        # the zip holds the board-look day pictures, so it's only offered when the article uses those
+        zip_url = "/calendar/article.zip" + q if p.get("day_look", "host") == "board" else ""
+        return web.Response(text=article_html(out, "/calendar.png" + q, zip_url,
                                               "/calendar/cover.png" + q, top=back),
                             content_type="text/html", charset="utf-8")
 
@@ -430,6 +497,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
     app.router.add_post("/settings/article", post)
     app.router.add_get("/settings/article/picture", picture)
     app.router.add_get("/settings/article/view", view)
+    app.router.add_get("/settings/article/day", day_picture)
 
 
 __all__ = ["add_routes", "new_draft", "finished", "section_html", "draft_key"]

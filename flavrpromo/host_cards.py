@@ -11,6 +11,12 @@ The hosts' review cards as HTML pages, screenshotted at 1600 x 900 like the boar
 
 Looks follow the mock-ups the owner approved (project files bot-presenter/two-characters/). Without a
 picture the card still works: the bubble / report just gets the whole width. All text is escaped.
+  day     one day of an article in the host's look instead of the board's (owner 2026-11-21: the
+          day pictures "dont follow the color scheme and fancy format the hosts come in with"):
+          Colette pins each stream up as a taped polaroid on her purple wall, Clark files them as
+          clipped photos on a cream report page. Their chibi sits in a corner with a line about the
+          day (hosts.day_line). Same 1600 x 900 and the same tile sizes as render.day_card.
+
 Who calls it: flavrpromo/host_picker.py (the review posts and the picker page's previews) and /host
 preview (flavrpromo/bot.py).
 """
@@ -18,10 +24,11 @@ preview (flavrpromo/bot.py).
 from __future__ import annotations
 
 import html
-from typing import Dict, List
+from datetime import timedelta
+from typing import Any, Callable, Dict, List
 
 from . import hosts
-from .render import logo_data_url
+from .render import DAY_MAX, _plats, clock, hm, logo_data_url, tile_layout
 
 BASE = ("*{box-sizing:border-box;margin:0}"
         "body{width:1600px;height:900px;position:relative;overflow:hidden;font-family:'DejaVu Sans',sans-serif}"
@@ -123,3 +130,96 @@ def desk(key: str, highlight: str, nudge: str, signoff: str, kind: str = "desk")
              + f'<div style="position:absolute;left:{left + 40}px;top:770px;font-size:24px;color:#ddd;font-style:italic">'
                f'— {_e(signoff)}</div>')
     return _doc("background:linear-gradient(135deg,#1b1018,#2a1026)", inner)
+
+
+DAY_HOST_W = 300        # px on the right of a host day card kept for the chibi and their line
+TAPE = ("#f8cf33cc", "#b7ef33cc", "#2ae0d4cc", "#f72ca2cc")     # Colette's tape colours (FlaVR, see-through)
+TILT = ("-2deg", "1.5deg", "-1deg", "2.2deg", "-1.6deg", "1deg")
+
+
+def day(key: str, week: Any, i: int, img: Callable[[str], str], line: str = "", chibi_kind: str = "") -> str:
+    """Day ``i`` of ``week`` (flavrpromo/calendar.py Week) in host ``key``'s look. ``img``: a picture
+    address for a thumbnail / avatar URL (render.ImageCache.data_url). ``line``: what the host says
+    about the day ("" = no bubble). ``chibi_kind``: which picture stands in the corner (default
+    their happy chibi). Called by flavrpromo/article_editor.py (/settings/article/day)."""
+    date = week.start + timedelta(days=i)
+    tiles = list(week.days[i])
+    shown = tiles if len(tiles) <= DAY_MAX else tiles[:DAY_MAX - 1]
+    count = len(shown) + (len(tiles) > len(shown))
+    area_w = 1600 - 80 - DAY_HOST_W
+    cols, rows, tw, label = tile_layout(max(1, count), area_w - 40)
+    # the polaroid / photo frames, tilt and the heading take room the board's plain tiles don't: a bit
+    # smaller, and one stream never wider than a photo should be (it would run off the bottom)
+    tw = min(int(tw * 0.86), 820)
+    pic = hosts.data_url(key, chibi_kind or "chibi_happy") or hosts.data_url(key, "chibi_happy")
+    cells = []
+    for k, t in enumerate(shown):
+        src = img(t.thumb) or img(t.avatar)
+        bg = f"background-image:url(&quot;{_e(src)}&quot;)" if src else ""
+        when = clock(t.at, week.tz) + (f" · {hm(t.length)}" if t.kind == "past" and t.end else
+                                       " · LIVE" if t.kind == "live" else "")
+        cells.append((k, t, bg, when))
+    n_word = f"{len(tiles)} stream{'' if len(tiles) == 1 else 's'}"
+    if key == "clark":
+        photos = "".join(
+            f'<div class=ph style="width:{tw}px"><i style="{bg}">{_plats(t)}</i><div class=clip></div>'
+            f'<b style="font-size:{label}px">{_e(t.name)}</b><span style="font-size:{label - 4}px">{_e(when)}</span></div>'
+            for k, t, bg, when in cells)
+        if len(tiles) > len(shown):
+            photos += f'<div class=ph style="width:{tw}px;font-size:26px;color:#8a5a33">+{len(tiles) - len(shown)} more on file</div>'
+        if not tiles:
+            photos = '<div style="font-size:34px;color:#8a5a33;margin:auto">Nothing on file for this day.</div>'
+        css = (".pg{position:absolute;left:40px;top:150px;width:" + str(area_w) + "px;height:710px;background:#f4ead8;"
+               "border-radius:6px;box-shadow:0 10px 30px #000a;padding:26px 20px;display:flex;flex-wrap:wrap;"
+               "justify-content:center;align-content:center;gap:28px 18px}"
+               ".ph{background:#fffaf0;padding:8px 8px 6px;box-shadow:0 3px 8px #0004;position:relative;color:#2b1d12}"
+               ".ph i{display:block;aspect-ratio:16/9;background:#d9c7a8 center/cover no-repeat;position:relative}"
+               ".ph b{display:block;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+               ".ph span{display:block;color:#8a5a33;white-space:nowrap}"
+               ".clip{position:absolute;top:-12px;left:22px;width:16px;height:40px;border:4px solid #9aa3ad;border-radius:9px}"
+               ".plat{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:5px;font:800 13px sans-serif;"
+               "display:inline-flex;align-items:center;justify-content:center}.ph i .plat+.plat{right:34px}")
+        side = (f'<img src="{pic}" style="position:absolute;right:30px;bottom:40px;width:{DAY_HOST_W - 20}px;height:380px;'
+                f'object-fit:contain;object-position:bottom">' if pic else "")
+        say = (f'<div class=serif style="position:absolute;right:30px;bottom:{440 if pic else 60}px;width:{DAY_HOST_W - 20}px;'
+               f'background:#f4ead8;color:#2b1d12;padding:18px 20px;font-size:22px;line-height:1.4;border-radius:4px;'
+               f'box-shadow:0 8px 20px #0009;font-style:italic">{_e(line)}<div style="text-align:right;margin-top:6px">— C.</div></div>'
+               if line else "")
+        inner = (f'<style>{css}</style>'
+                 f'<div class=serif style="position:absolute;left:44px;top:30px;font-size:54px;color:#e0782e">'
+                 f'{_e(f"{date:%A}, {date:%B} {date.day}")}</div>'
+                 f'<div style="position:absolute;left:46px;top:102px;font-size:21px;letter-spacing:2px;color:#d9b88a">'
+                 f'DAY REPORT · {_e(n_word.upper())} · FILED BY CLARK</div>'
+                 f'<div class="pg serif">{photos}</div>{side}{say}')
+        return _doc("background:linear-gradient(135deg,#1c130d,#3a2416 70%,#4a2a14);color:#f3e6d3", inner)
+    # Colette: taped polaroids on her purple wall
+    shots = "".join(
+        f'<div class=po style="width:{tw + 20}px;transform:rotate({TILT[k % len(TILT)]})">'
+        f'<div class=tape style="background:{TAPE[k % len(TAPE)]}"></div><i style="{bg}">{_plats(t)}</i>'
+        f'<b style="font-size:{label}px">{_e(t.name)}</b><span style="font-size:{label - 4}px">{_e(when)}</span></div>'
+        for k, t, bg, when in cells)
+    if len(tiles) > len(shown):
+        shots += (f'<div class=note style="position:static;width:{tw}px;transform:rotate(2deg)">'
+                  f'+{len(tiles) - len(shown)} more!!</div>')
+    if not tiles:
+        shots = '<div class=note style="position:static;font-size:34px;transform:rotate(-2deg)">Nothing on the board yet!</div>'
+    css = (".wall{position:absolute;left:40px;top:150px;width:" + str(area_w) + "px;height:720px;display:flex;flex-wrap:wrap;"
+           "justify-content:center;align-content:center;gap:22px 24px}"
+           ".po{background:#fff;padding:10px 10px 8px;box-shadow:4px 8px 18px #0008;position:relative;color:#1a1a1a}"
+           ".po i{display:block;aspect-ratio:16/9;background:#2a1026 center/cover no-repeat;position:relative}"
+           ".po b{display:block;margin-top:6px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+           ".po span{display:block;color:#c21c80;font-weight:700;white-space:nowrap}"
+           ".tape{position:absolute;top:-14px;left:50%;width:110px;height:30px;margin-left:-55px;transform:rotate(-3deg);"
+           "box-shadow:0 1px 3px #0003}"
+           ".plat{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:5px;font:800 13px sans-serif;"
+           "display:inline-flex;align-items:center;justify-content:center}.po i .plat+.plat{right:34px}")
+    side = (f'<img src="{pic}" style="position:absolute;right:30px;bottom:30px;width:{DAY_HOST_W - 20}px;height:380px;'
+            f'object-fit:contain;object-position:bottom">' if pic else "")
+    say = (f'<div class=bub style="right:30px;bottom:{420 if pic else 60}px;width:{DAY_HOST_W - 10}px;font-size:22px;'
+           f'border:5px solid #f72ca2">{_e(line)}</div>' if line else "")
+    inner = (f'<style>{css}</style><img src="{logo_data_url()}" style="position:absolute;left:40px;top:30px;height:66px">'
+             f'<div style="position:absolute;left:270px;top:32px;font-size:52px;font-weight:900;letter-spacing:3px">'
+             f'{_e(f"{date:%A} · {date:%b} {date.day}".upper())}</div>'
+             f'<div style="position:absolute;left:272px;top:98px;font-size:22px;color:#f8cf33;font-weight:700">'
+             f'{_e(n_word)} · pinned up by Colette ☕</div><div class=wall>{shots}</div>{side}{say}')
+    return _doc("background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a);color:#fff", inner)

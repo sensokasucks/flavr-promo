@@ -41,7 +41,8 @@ built-in", and every host line slot for both hosts as editable text. Linked at t
 - `/settings/article`: the article editor. Pick a group and a review or week; the X Article is cut
   into sections (host intro, summary, who streamed, each day, uploads, hashtags, host outro, your
   own text). Leave sections in or out, move them, regen one from the calendar, get new host lines
-  (templates, or ✨ KoboldCpp), pick each host section's picture (opener card with chibi or regular
+  (templates, or ✨ KoboldCpp), day pictures in the host's look (Colette's taped polaroids or
+  Clark's filed photos, with their line about the day) or the board look, pick each host section's picture (opener card with chibi or regular
   big, desk card, one plain picture, or none), then open the finished article to copy.
 - `/settings/commands`: a form for every slash command, run as the owner; the answer shows on the
   page (things a command posts in a channel still go there).

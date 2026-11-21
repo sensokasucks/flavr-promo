@@ -133,6 +133,19 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             assert "Big week, people!" in view and "See you Monday." in view and "Colette Cappuccino" in view
             assert "hours live" not in view.split('id="body"')[1]           # the summary line is out
             assert "back to the article editor" in view and "outro-colette-sleepy.png" in view
+            # day pictures in the host's look (owner 2026-11-21), with an editable line per day
+            day = next(s["id"] for s in p["sections"] if s["id"].startswith("day"))
+            assert p["day_look"] == "host" and p["day_lines"][day[3:]]
+            p = await act("save", on_summary="", **{f"dayline_{day[3:]}": "Mark it, team!"})
+            assert p["day_lines"][day[3:]] == "Mark it, team!"
+            r = await c.get(f"/settings/article/day?d={dkey}&day={day[3:]}")
+            assert r.status == 200 and "Mark it, team!" in poster.shooter.docs[-1]
+            assert "pinned up by Colette" in poster.shooter.docs[-1]
+            view = await (await c.get(f"/settings/article/view?d={dkey}")).text()
+            assert "/settings/article/day?d=" in view and "/calendar/day.png" not in view.split('id="body"')[1]
+            p = await act("save", on_summary="", day_look="board")
+            view = await (await c.get(f"/settings/article/view?d={dkey}")).text()
+            assert "/calendar/day.png" in view.split('id="body"')[1]
             # the other host, then start over
             p = await act("host", on_summary="", host="clark")
             assert p["host"] == "clark" and not p["picks"]
