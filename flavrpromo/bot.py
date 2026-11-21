@@ -45,6 +45,8 @@ up to an hour to show the first time):
     /setup share-style style [bold_days] [hashtags]   the X text's default layout (post + links reply /
                         one post / 280 thread), bold-looking day headings, a hashtag line
     /friend x name handle   their X handle ("-" removes it); tagged only with /setup share-style tag_people
+    /friend game name game   set the game of someone's live stream by hand (YouTube has no category)
+    /friend games name      someone's games: streams each and when last (anyone)
     /friend signoff add name line [emoji] | remove name number | list name   the lines someone ends their
                         stream with; one goes on each "was live" card (flavrpromo/signoff.py)
   Community calendar (flavrpromo/promo.py): streams members add from their self-promo posts
@@ -83,7 +85,7 @@ from discord import app_commands
 from . import focus, sysinfo
 from .calendar import DAY_NAMES, REVIEW_NAMES
 from .config import Settings
-from . import promo, signoff, talent
+from . import games, promo, signoff, talent
 from .pings import KINDS, Pinger, length
 from .share import X_STYLES
 from . import groups
@@ -278,8 +280,14 @@ class PromoBot(discord.Client):
                           colour=groups.colour_int(person.get("grp") or "flavr"))
         links = " · ".join(f"[{PLATFORM_ICONS.get(p, p)}]({i.get('url')})" for p, i in live_on.items())
         e.add_field(name="Watch", value=links or "—", inline=False)
-        if session.get("game"):
-            e.add_field(name="Playing", value=session["game"], inline=True)
+        # the game with its history tag, and the games before it in this stream (flavrpromo/games.py)
+        now = games.now_playing(self.store, session.get("id"))
+        game = now.get("game") or session.get("game")
+        if game:
+            tag = now.get("tag") if now.get("game") else ""
+            e.add_field(name="Playing", value=f"{game} · {tag}" if tag else game, inline=True)
+        if now.get("earlier"):
+            e.add_field(name="Earlier", value=now["earlier"][:1024], inline=False)
         if session.get("restarts"):
             e.add_field(name="Restarts", value=str(session["restarts"]), inline=True)
         if info.get("thumb"):
@@ -358,6 +366,14 @@ class PromoBot(discord.Client):
             e = msg.embeds[0] if msg.embeds else discord.Embed()
             e.title = f"{person['name']} was live"
             e.colour = ENDED_COLOUR
+            # the live fields "Playing" / "Earlier" become one "Played" line, every game in order
+            kept = [f for f in e.fields if f.name not in ("Playing", "Earlier", "Played")]
+            e.clear_fields()
+            for f in kept:
+                e.add_field(name=f.name, value=f.value, inline=f.inline)
+            trail = games.played(self.store, session.get("id"), session.get("ended_at"))
+            if trail:
+                e.add_field(name="Played", value=trail[:1024], inline=False)
             e.set_footer(text=f"Live for {length(float(session['ended_at']) - float(session['started_at']))}")
             # the VOD the watcher found (flavrpromo/watcher.py find_vod: Twitch archive / YouTube stream page)
             if session.get("vod_url"):
@@ -686,6 +702,45 @@ class PromoBot(discord.Client):
             if bot.calendar:
                 bot.calendar.poke()
             await inter.response.send_message(f"{p['name']} is in {groups.name(g)} now.", ephemeral=True)
+
+        @friend.command(name="game", description="Set the game of someone's stream that's on now (YouTube shows none)")
+        @app_commands.autocomplete(name=person_auto)
+        @app_commands.describe(game="Like Valheim; remembered, so their next YouTube titles that name it are found")
+        async def friend_game(inter: discord.Interaction, name: str, game: str):
+            # flavrpromo/games.py: a new segment with its history tag, then the live card is edited
+            if not await managers_only(inter):
+                return
+            p = bot.store.person(name)
+            s = bot.store.open_session(p["id"]) if p else None
+            game = " ".join(game.split())[:100]
+            if not p or not s or not game:
+                await inter.response.send_message(f"{name} isn't live right now." if p else f"No one called {name}.",
+                                                  ephemeral=True)
+                return
+            bot.store.update_session(s["id"], game=game)
+            games.track(bot.store, s["id"], p["id"], game, time.time())
+            live_on = bot.watcher.live_on(p)
+            if live_on:
+                await bot.post_change(p, {**s, "game": game}, live_on)
+            tag = games.now_playing(bot.store, s["id"]).get("tag")
+            await inter.response.send_message(f"{p['name']} is playing {game}" + (f" ({tag})." if tag else "."),
+                                              ephemeral=True, allowed_mentions=NO_PINGS)
+
+        @friend.command(name="games", description="Someone's games: how many streams each, and when last")
+        @app_commands.autocomplete(name=person_auto)
+        async def friend_games(inter: discord.Interaction, name: str):
+            p = bot.store.person(name)
+            if not p:
+                await inter.response.send_message(f"No one called {name}.", ephemeral=True)
+                return
+            rows = games.history(bot.store, p["id"], limit=15)
+            if not rows:
+                await inter.response.send_message(f"No games seen for {p['name']} yet.", ephemeral=True)
+                return
+            lines = [f"**{discord.utils.escape_markdown(r['game'])}**: {r['streams']} stream(s), last <t:{int(r['last'])}:R>"
+                     for r in rows]
+            await inter.response.send_message(f"{p['name']}'s games\n" + "\n".join(lines), ephemeral=True,
+                                              allowed_mentions=NO_PINGS)
 
         # /friend signoff add|remove|list (flavrpromo/signoff.py)
         signoff.register_friend(friend, bot, managers_only, person_auto)
