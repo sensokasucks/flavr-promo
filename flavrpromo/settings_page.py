@@ -2,11 +2,12 @@
 The settings page: http://<this PC>:3871/settings (owner 2026-11-21: "a local web page to set that
 kobold URL and maybe other tweaks that'd be troublesome to do over Discord commands").
 
-The other settings pages share its look and top links (``frame``, PAGES): character cards
-(flavrpromo/card_page.py), the article editor (article_editor.py) and the command forms
-(command_forms.py).
+All the settings pages are drawn in the panel shell (flavrpromo/panel.py: menu on the left, tabs
+across the top): this file holds the Bot > Settings, Hosts > Pictures and Hosts > Host lines tabs;
+character cards (card_page.py), the article editor (article_editor.py), the line picker
+(host_picker.py) and the command forms (command_forms.py) are the others.
 
-Sections (each its own form; a save redirects back with a note):
+Tabs and sections (each its own form; a save redirects back with a note):
   KoboldCpp   address, password (never shown back), creativity (temperature) and lines per slot,
               a Test button that asks KoboldCpp for its model. Saved in kv "kobold"; it wins over
               KOBOLD_URL / KOBOLD_KEY from the environment (an empty address there = off).
@@ -16,9 +17,11 @@ Sections (each its own form; a save redirects back with a note):
               long the Sunday board waits for the week-ahead picks (kv host_preview_wait, hours); the
               recap picture on ended go-live cards (kv host_recap_card, default on); boards in the
               host's look (kv host_board, default on).
-  Pictures    every picture kind for both hosts with a preview, upload to replace one (the same
-              as /host picture) and "back to built-in" (deletes the upload).
-  Lines       every template slot for both hosts as a text box, one line per row; a blank that
+  Pictures    (/settings/pictures) every picture kind for both hosts with a preview, upload to
+              replace the main one (the same as /host picture) and "back to built-in" (deletes the
+              upload), plus a POOL of extra pictures per kind (add several at once, remove one;
+              flavrpromo/hosts.py ``variants``): posts pick from the pool at random.
+  Lines       (/settings/lines) every template slot for both hosts as a text box, one line per row; a blank that
               isn't in hosts.BLANKS is refused, an emptied box goes back to the built-in lines.
               Saved in kv "host_templates" (flavrpromo/hosts.py ``load_overrides``).
 
@@ -28,7 +31,6 @@ Who calls it: flavrpromo/__main__.py (``apply`` at start, ``add_routes`` on the 
 
 from __future__ import annotations
 
-import html
 import logging
 from typing import Any, Dict, List
 from urllib.parse import quote
@@ -36,13 +38,10 @@ from urllib.parse import quote
 from aiohttp import web
 
 from . import host_picker, hosts, kobold
+from .panel import _e, frame      # re-exported: card_page, article_editor and command_forms import them from here
 from .kobold import PER_SLOT, Kobold
 
 log = logging.getLogger("flavrpromo.settings_page")
-
-
-def _e(s: Any) -> str:
-    return html.escape(str(s if s is not None else ""))
 
 
 def kobold_settings(poster: Any) -> Dict[str, Any]:
@@ -65,7 +64,13 @@ def apply(poster: Any) -> None:
     kobold.load_card_overrides(poster.store)
 
 
+# which tab a save goes back to ("pictures" and "lines" moved to their own tabs, others stay on Settings)
+_TAB_OF = {"pictures": "/settings/pictures", "lines": "/settings/lines"}
+
+
 def _back(note: str, anchor: str = "") -> web.HTTPSeeOther:
+    if anchor in _TAB_OF:
+        return web.HTTPSeeOther(f"{_TAB_OF[anchor]}?saved={quote(note)}")
     return web.HTTPSeeOther(f"/settings?saved={quote(note)}" + (f"#{anchor}" if anchor else ""))
 
 
@@ -107,7 +112,13 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
            f'<label>Sunday board waits <input name=preview_wait type=number min=0 max=48 step=0.5 value="{wait:g}" '
            f'style="width:5em"> hours for the week-ahead picks, then posts without the host <small>(0 = wait for ever)</small></label>'
            + '<p><button>Save</button> <a href="/hosts/pick">Open the line picker</a></p></form></section>')
-    # pictures
+    return frame("FlaVR Promo settings", "⚙️ Settings", kob + hst, saved)
+
+
+def pictures_page(poster: Any, saved: str = "") -> str:
+    """Hosts > Pictures: every picture kind of both hosts as a POOL (flavrpromo/hosts.py): the main
+    picture (replace / back to built-in) plus extra pictures to add and remove; the system picks one
+    of the pool at random, and the article editor lets you pin one."""
     cells = []
     for key, h in hosts.HOSTS.items():
         have = hosts.pictures(key)
@@ -115,16 +126,43 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
             src = f"/settings/picture/{key}/{kind}" if have[kind] else ""
             img = f'<img src="{src}" loading=lazy alt="">' if src else '<div class=none>none</div>'
             reset = '<button name=action value=reset>Back to built-in</button>' if have[kind] == "yours" else ""
-            cells.append(f'<form class=pic method=post action=/settings/picture enctype=multipart/form-data>'
+            pool = ""
+            if kind in hosts.POOLED:
+                extra = hosts.variants(key, kind)[1:] if have[kind] else [
+                    v for v in hosts.variants(key, kind) if v[0] != "main"]
+                thumbs = "".join(
+                    f'<form class=thumb method=post action=/settings/pool><input type=hidden name=host value={key}>'
+                    f'<input type=hidden name=kind value={kind}><input type=hidden name=vid value="{_e(v)}">'
+                    f'<img src="/settings/picture/{key}/{kind}?v={_e(v)}" loading=lazy alt="">'
+                    f'<button name=action value=remove class=alt title="Remove this picture">✕</button></form>'
+                    for v, _ in extra)
+                pool = (f'<div class=pool><small>Pool: {1 + len(extra) if have[kind] else len(extra)} '
+                        f'picture{"" if len(extra) == 0 and have[kind] else "s"}'
+                        f'{" (random pick)" if extra else ""}</small>{thumbs}'
+                        f'<form method=post action=/settings/pool enctype=multipart/form-data>'
+                        f'<input type=hidden name=host value={key}><input type=hidden name=kind value={kind}>'
+                        f'<input type=file name=file accept=".png,.jpg,.jpeg,.webp" multiple>'
+                        f'<button name=action value=add>Add to pool</button></form></div>')
+            cells.append(f'<div class=pic><form method=post action=/settings/picture enctype=multipart/form-data>'
                          f'<input type=hidden name=host value={key}><input type=hidden name=kind value={kind}>'
                          f'{img}<b>{_e(h["name"])}: {_e(kind.replace("_", " "))}</b>'
-                         f'<small>{_e(have[kind] or "missing")}</small>'
+                         f'<small>main picture: {_e(have[kind] or "missing")}</small>'
                          f'<input type=file name=file accept=".png,.jpg,.jpeg,.webp">'
-                         f'<button name=action value=upload>Upload</button> {reset}</form>')
-    pics = (f'<section id=pictures><h2>🖼️ Pictures</h2><p class=help>PNG, JPG or WebP up to 8 MB; see-through '
-            f'PNG / WebP is best. An upload replaces the built-in picture of that kind.</p>'
-            f'<div class=grid>{"".join(cells)}</div></section>')
-    # lines
+                         f'<button name=action value=upload>Replace main</button> {reset}</form>{pool}</div>')
+    body = (f'<section id=pictures><p class=help>PNG, JPG or WebP up to 8 MB; see-through PNG / WebP is best. '
+            f'"Replace main" swaps the main picture of that kind. <b>Add to pool</b> adds more pictures to the '
+            f'same kind (up to {hosts.POOL_MAX}): a post or article picks one of them at random, and in the '
+            f'article editor you can choose a specific one or re-roll. Head pictures (the go-live avatar) stay '
+            f'single.</p><div class=grid>{"".join(cells)}</div></section>')
+    return frame("FlaVR Promo pictures", "🖼️ Pictures", body, saved, style=(
+        ".pool{margin-top:8px;border-top:1px solid #3d2a3b;padding-top:6px}"
+        ".thumb{display:inline-block;position:relative;margin:2px}.thumb img{width:64px!important;height:64px!important}"
+        ".thumb button{position:absolute;top:2px;right:2px;padding:0 6px}"))
+
+
+def lines_page(poster: Any, saved: str = "") -> str:
+    """Hosts > Host lines: every template slot of both hosts as a text box."""
+    store = poster.store
     blocks = []
     for key, h in hosts.HOSTS.items():
         rows = []
@@ -141,38 +179,7 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
              f'(reviews: you pick on the picker page). Blanks in braces are filled in; a line whose blank has no '
              f'value is skipped. Allowed blanks: {_e(" ".join("{" + b + "}" for b in hosts.BLANKS))}. An empty box '
              f'uses the built-in lines.</p>{"".join(blocks)}</section>')
-    nav = ('<nav class=in><a href="#kobold">KoboldCpp</a> · <a href="#hosts">Hosts</a> · <a href="#pictures">Pictures</a> · '
-           '<a href="#lines">Lines</a></nav>')
-    return frame("FlaVR Promo settings", "⚙️ Settings", nav + kob + hst + pics + lines, saved)
-
-
-# the pages that share this look (the top links; keep in step with each page's add_routes)
-PAGES = (("/settings", "⚙️ Settings"), ("/settings/cards", "🧾 Character cards"),
-         ("/settings/article", "📰 Article editor"), ("/settings/commands", "⌨️ Commands"),
-         ("/hosts/pick", "🎙️ Line picker"))
-STYLE = ("body{font-family:sans-serif;background:#1b1018;color:#eee;"
-         "max-width:1100px;margin:auto;padding:16px}a{color:#2ae0d4}section{border-bottom:2px solid #444;padding:10px 0 20px}"
-         "label{display:block;margin:8px 0}input:not([type=checkbox]):not([type=radio]):not([type=file]),select{width:min(420px,90%)}"
-         "input[type=number]{width:90px!important}button{padding:7px 12px;border-radius:8px;border:0;font-weight:bold;"
-         "background:#f72ca2;color:#fff;cursor:pointer}button.alt{background:#3a2d3a}.help,small{color:#aab;display:block}"
-         ".saved,.test{background:#2ae0d4;color:#000;padding:8px;border-radius:8px;white-space:pre-wrap}"
-         ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}"
-         ".pic{background:#2a1a28;border-radius:10px;padding:10px}.pic img,.pic .none{width:100%;height:150px;"
-         "object-fit:contain;background:#0e0f14;border-radius:8px;display:flex;align-items:center;justify-content:center}"
-         ".pic b{display:block;margin-top:6px}.pic input[type=file]{width:100%;margin:6px 0}"
-         "textarea{width:100%;font-size:14px;background:#0e0f14;color:#eee;border:1px solid #555;border-radius:6px}"
-         "nav.top{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px}nav.top b{color:#f72ca2}"
-         "pre{white-space:pre-wrap;background:#0e0f14;padding:10px;border-radius:8px;font-size:13px}")
-
-
-def frame(title: str, heading: str, body: str, saved: str = "", style: str = "") -> str:
-    """A whole page in the settings look with the links to the other pages (PAGES) on top. Used by
-    this page, flavrpromo/card_page.py, article_editor.py and command_forms.py. ``style``: extra CSS."""
-    links = " ".join(f"<b>{_e(n)}</b>" if n == heading else f'<a href="{u}">{_e(n)}</a>' for u, n in PAGES)
-    note = f'<p class=saved>{_e(saved)}</p>' if saved else ""
-    return ("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width'>"
-            f"<title>{_e(title)}</title><style>{STYLE}{style}</style></head><body>"
-            f"<nav class=top>{links}</nav><h1>{_e(heading)}</h1>{note}{body}</body></html>")
+    return frame("FlaVR Promo host lines", "💬 Host lines", lines, saved)
 
 
 def add_routes(app: web.Application, poster: Any) -> None:
@@ -248,10 +255,34 @@ def add_routes(app: web.Application, poster: Any) -> None:
 
     async def picture(request: web.Request) -> web.Response:
         key, kind = request.match_info["host"], request.match_info["kind"]
-        p = hosts.picture(key, kind) if kind in hosts.KINDS else None
-        if p is None or p.stem != kind:             # only that exact kind (no fallback) on the settings page
+        # only that exact kind (no fallback) on the settings page; ?v= = one extra picture of its pool
+        p = hosts.exact(key, kind, request.query.get("v") or "main") if kind in hosts.KINDS else None
+        if p is None:
             raise web.HTTPNotFound()
         return web.FileResponse(p, headers={"Cache-Control": "no-store"})
+
+    async def save_pool(request: web.Request) -> web.Response:
+        """Add (several files at once) or remove extra pictures of a kind's pool (hosts.add_to_pool)."""
+        form = await request.post()
+        key, kind = str(form.get("host") or ""), str(form.get("kind") or "")
+        if key not in hosts.HOSTS or kind not in hosts.POOLED:
+            raise _back("Unknown picture.", "pictures")
+        who = f"{hosts.HOSTS[key]['name']}'s {kind.replace('_', ' ')}"
+        if str(form.get("action")) == "remove":
+            gone = hosts.remove_from_pool(key, kind, str(form.get("vid") or ""))
+            raise _back(f"Removed a picture from {who}." if gone else "That picture was already gone.", "pictures")
+        files = [f for f in form.getall("file", []) if isinstance(f, web.FileField) and f.filename]
+        if not files:
+            raise _back("Pick one or more files first.", "pictures")
+        done, errs = 0, []
+        for f in files:
+            err = hosts.add_to_pool(key, kind, f.file.read(hosts.MAX_PICTURE + 1), f.filename)
+            if err:
+                errs.append(f"{f.filename}: {err}")
+            else:
+                done += 1
+        raise _back(f"Added {done} picture{'' if done == 1 else 's'} to {who}." + (" " + " ".join(errs) if errs else ""),
+                    "pictures")
 
     async def save_lines(request: web.Request) -> web.Response:
         form = await request.post()
@@ -282,7 +313,16 @@ def add_routes(app: web.Application, poster: Any) -> None:
         hosts.load_overrides(store)
         raise _back(f"Saved {hosts.HOSTS[key]['name']}'s lines ({len(mine)} slot{'' if len(mine) == 1 else 's'} edited).", "lines")
 
+    async def get_pictures(request: web.Request) -> web.Response:
+        return web.Response(text=pictures_page(poster, request.query.get("saved", "")), content_type="text/html")
+
+    async def get_lines(request: web.Request) -> web.Response:
+        return web.Response(text=lines_page(poster, request.query.get("saved", "")), content_type="text/html")
+
     app.router.add_get("/settings", get)
+    app.router.add_get("/settings/pictures", get_pictures)
+    app.router.add_get("/settings/lines", get_lines)
+    app.router.add_post("/settings/pool", save_pool)
     app.router.add_post("/settings/kobold", save_kobold)
     app.router.add_post("/settings/hosts", save_hosts)
     app.router.add_post("/settings/picture", save_picture)

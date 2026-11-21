@@ -15,6 +15,9 @@ This file holds who the hosts are, their pictures, which one presents a post, an
     picked on the picker page) and chibi_head. Built-in defaults of all ten (the owner's art) are in
     flavrpromo/host_art; an upload replaces one. A missing pose falls back to another pose,
     a missing chibi to another chibi; no pictures at all still works (text only).
+    Each kind (not the heads) is a POOL: the main picture plus extra uploads from the settings
+    page's Pictures tab (DATA_DIR/hosts/<host>/pool/<kind>/<n>.png); ``picture`` picks one at
+    random, or by the open article draft's seed / pin (``look``, article_editor.py).
   * Which host: random per post, but never the same one three times in a row (kv host_last), or
     always one when the owner picks it (/host setup only:). Off until /host setup on (kv hosts_on),
     so other groups running their own copy see no change until they add hosts.
@@ -36,9 +39,11 @@ import mimetypes
 import random
 import string
 from collections import Counter
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from . import gameinfo
 from .store import Store
@@ -93,8 +98,30 @@ def choose(store: Store, rng: Optional[random.Random] = None) -> str:
 
 
 # ── pictures ───────────────────────────────────────────────────────────
-def picture(key: str, kind: str) -> Optional[Path]:
-    """The picture file, or None. A missing pose falls back to another pose."""
+# Each picture kind ("happy", "chibi_desk", ...) is a POOL: the main picture (the owner's upload, else
+# the built-in one; id "main") plus any number of extra pictures uploaded on the settings page's
+# Pictures tab (data folder <host>/pool/<kind>/<n>.<ext>, id "<n>"). ``picture`` picks one of them:
+# the one pinned for the open article draft, else one chosen by the draft's seed (so a draft keeps
+# its pictures until the owner re-rolls), else at random (go-live recaps, day posts and so on).
+# Head pictures stay single: the go-live webhook avatar is compared with the file and must not flip.
+POOLED = tuple(k for k in KINDS if not k.endswith("head"))
+POOL_MAX = 12                       # extra pictures per kind
+_look: ContextVar[Optional[Tuple[Optional[int], Dict[str, str]]]] = ContextVar("host_look", default=None)
+
+
+@contextmanager
+def look(seed: Optional[int], pins: Optional[Dict[str, str]] = None) -> Iterator[None]:
+    """Inside the block ``picture`` picks by ``seed`` (None = at random) and ``pins`` ({kind: variant
+    id}). flavrpromo/article_editor.py wraps the pictures of one draft in it (draft p["seed"], p["pins"])."""
+    token = _look.set((seed, dict(pins or {})))
+    try:
+        yield
+    finally:
+        _look.reset(token)
+
+
+def _base(key: str, kind: str) -> Optional[Path]:
+    """The main picture of a kind: yours, else built-in; a missing pose falls back to another pose."""
     if key not in HOSTS:
         return None
     folders = [f for f in (_folder, DEFAULTS if _defaults else None) if f is not None]
@@ -106,6 +133,79 @@ def picture(key: str, kind: str) -> Optional[Path]:
                 if p.is_file():
                     return p
     return None
+
+
+def _pool_files(key: str, kind: str) -> List[Path]:
+    """The uploaded extra pictures of a kind, oldest first (file names are numbers)."""
+    if _folder is None or key not in HOSTS or kind not in POOLED:
+        return []
+    folder = _folder / key / "pool" / kind
+    files = [f for f in folder.glob("*") if f.is_file() and f.suffix.lower() in EXTS] if folder.is_dir() else []
+    return sorted(files, key=lambda f: (len(f.stem), f.stem))
+
+
+def variants(key: str, kind: str) -> List[Tuple[str, Path]]:
+    """Every picture a kind can show: ("main", the main picture) then ("<n>", each extra upload)."""
+    out: List[Tuple[str, Path]] = []
+    base = _base(key, kind)
+    if base is not None:
+        out.append(("main", base))
+    out += [(f.stem, f) for f in _pool_files(key, kind)]
+    return out
+
+
+def exact(key: str, kind: str, vid: str = "main") -> Optional[Path]:
+    """One specific picture of a kind, no fallback to another pose (the settings page's thumbnails)."""
+    for v, p in variants(key, kind):
+        if v == vid and (vid != "main" or p.stem == kind):
+            return p
+    return None
+
+
+def picture(key: str, kind: str) -> Optional[Path]:
+    """The picture file to draw, or None: one of the kind's pool (see the block comment above)."""
+    options = variants(key, kind)
+    if len(options) <= 1:
+        return options[0][1] if options else None
+    ctx = _look.get()
+    seed, pins = ctx if ctx else (None, {})
+    for vid, path in options:
+        if vid == pins.get(kind):
+            return path
+    if seed is not None:
+        return random.Random(f"{seed}|{key}|{kind}").choice(options)[1]
+    return random.choice(options)[1]
+
+
+def add_to_pool(key: str, kind: str, data: bytes, filename: str) -> str:
+    """Settings page: add an extra picture to a kind's pool; returns "" when saved, else why not."""
+    if _folder is None:
+        return "The bot has no data folder for pictures."
+    ext = Path(filename or "").suffix.lower()
+    if key not in HOSTS or kind not in POOLED:
+        return "Unknown host or picture kind (head pictures stay single)."
+    if ext not in EXTS:
+        return "Send a PNG, JPG or WebP picture."
+    if len(data) > MAX_PICTURE:
+        return "That picture is over 8 MB."
+    have = _pool_files(key, kind)
+    if len(have) >= POOL_MAX:
+        return f"That kind already has {POOL_MAX} extra pictures; remove one first."
+    folder = _folder / key / "pool" / kind
+    folder.mkdir(parents=True, exist_ok=True)
+    n = max([int(f.stem) for f in have if f.stem.isdigit()] + [0]) + 1     # numbers are never reused
+    (folder / f"{n}{'.jpg' if ext == '.jpeg' else ext}").write_bytes(data)
+    return ""
+
+
+def remove_from_pool(key: str, kind: str, vid: str) -> bool:
+    """Settings page: delete one extra picture (True if it was there). The main picture goes with
+    ``remove_picture`` (back to built-in)."""
+    for f in _pool_files(key, kind):
+        if f.stem == vid:
+            f.unlink()
+            return True
+    return False
 
 
 def face(key: str) -> Optional[Path]:

@@ -127,6 +127,35 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             p = await act("save", on_summary="", pic_outro="pic:sleepy")
             r = await c.get(f"/settings/article/picture?d={dkey}&sec=outro")
             assert r.status == 200 and len(await r.read()) > 1000
+            # picture variations: with a pool the draft keeps its pick (seed), 🎲 changes it, a pin wins
+            assert "Picture variations" not in await (await c.get("/settings/article?group=flavr&which=week")).text()
+            for n in (b"v-one", b"v-two", b"v-three"):
+                assert hosts.add_to_pool("colette", "sleepy", n * 400, "x.png") == ""
+            page = await (await c.get("/settings/article?group=flavr&which=week")).text()
+            assert "Picture variations" in page and 'name="pin_sleepy"' in page and "?v=3" in page
+            seen = set()
+            for _ in range(3):                                # the same draft: always the same picture
+                r = await c.get(f"/settings/article/picture?d={dkey}&sec=outro")
+                seen.add(await r.read())
+            assert len(seen) == 1
+            first = seen.pop()
+            for _ in range(40):                               # 🎲 until a different one shows
+                p = await act("reroll_pics", on_summary="")
+                r = await c.get(f"/settings/article/picture?d={dkey}&sec=outro")
+                if await r.read() != first:
+                    break
+            else:
+                raise AssertionError("re-rolling never changed the picture")
+            p = await act("save", on_summary="", pin_sleepy="2")
+            assert p["pins"] == {"sleepy": "2"}
+            r = await c.get(f"/settings/article/picture?d={dkey}&sec=outro")
+            assert await r.read() == b"v-two" * 400
+            p = await act("reroll_pics", on_summary="")       # a pin survives a re-roll
+            assert (await (await c.get(f"/settings/article/picture?d={dkey}&sec=outro")).read()) == b"v-two" * 400
+            p = await act("save", on_summary="", pin_sleepy="")
+            assert p["pins"] == {}
+            p = await act("save", on_summary="", pin_sleepy="nope")           # an unknown id is ignored
+            assert p["pins"] == {}
             # Regen: a calendar section from the calendar, a host section gets new (shuffled) lines
             p = await act("regen:summary", on_summary="")
             p = await act("regen:outro", on_summary="")

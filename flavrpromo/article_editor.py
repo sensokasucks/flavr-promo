@@ -123,6 +123,7 @@ async def new_draft(poster: Any, group: str, which: str, host: str = "") -> Dict
          + [dict(s, on=True) for s in a["sections"]]
          + [{"id": "outro", "title": HOST_SECTIONS["outro"], "on": True}]}
     p["day_look"], p["cover_look"], p["cover_figure"] = "host", "host", "happy"
+    p["seed"], p["pins"] = random.randrange(1_000_000), {}
     _host_lines(p)
     _day_lines(p, week)
     return p
@@ -162,7 +163,15 @@ def migrate(p: Dict[str, Any]) -> Dict[str, Any]:
         p.setdefault("candidates", {}).setdefault(f"day{k}", [v] if v else [])
     p.setdefault("cover_look", "host")
     p.setdefault("cover_figure", "happy")
+    p.setdefault("seed", int(p.get("built_at") or 0))    # which pool picture each kind shows (hosts.look)
+    p.setdefault("pins", {})                              # {picture kind: pool picture id} chosen by hand
     return p
+
+
+def _looks(p: Dict[str, Any]) -> Any:
+    """``with _looks(p):`` the draft's picture choices (seed + pins) apply to every host picture drawn
+    inside it, so a draft keeps its pictures until the owner re-rolls or pins one (flavrpromo/hosts.py ``look``)."""
+    return hosts.look(p.get("seed"), p.get("pins"))
 
 
 def slot_section(slot: str) -> str:
@@ -436,6 +445,7 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
     head = (f'<p>Host <select name=host>{hopts}</select> <button name=action value=host class=alt>Change host</button> '
             f'<small>Changing the host gives new lines for both host sections and the day pictures.</small></p>'
             f'<p>Day pictures <select name=day_look>{lopts}</select> <select name=day_layout>{alls}</select> <button name=action value=save class=alt>Apply</button></p>{cover}{ai_note}'
+            f'{_variation_picker(p)}'
             f'<p class=help>Calendar sections are as of {built}. <button name=action value=regen_all class=alt>↻ Regen every '
             f'calendar section</button> <button name=action value=add_text class=alt>+ Add a text section</button> '
             f'<button name=action value=reset class=alt>Start over</button></p>')
@@ -445,7 +455,11 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
             + "".join(secs)
             + f'<p class=bar><button name=action value=save>Save</button> '
               f'<a class=btn href="{view}" target=_blank>Open the finished article ↗</a></p></form>')
-    style = (".row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}.row label{margin:0}.row select{width:auto}"
+    style = (".variations{border:1px solid #3d2a3b;border-radius:10px;padding:6px 12px;margin:10px 0}"
+             ".varrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0}.varrow b{width:110px}"
+             ".var{display:inline-flex;align-items:center;gap:3px;margin:0}.var img{width:56px;height:56px;object-fit:contain;"
+             "background:#0e0f14;border-radius:6px}"
+             ".row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}.row label{margin:0}.row select{width:auto}"
              ".sec{border:1px solid #555;border-radius:10px;padding:10px 14px;margin:12px 0;border-bottom:1px solid #555}"
              ".sec.off{opacity:.55}.head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center}"
              ".head label{margin:0}.kind{display:inline;color:#889}.box{background:#fff;color:#111;border-radius:8px;"
@@ -462,6 +476,32 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
              "if(b&&/^(ask|ai):/.test(b.value)){b.textContent='✨ writing… (up to a minute)';"
              "setTimeout(()=>document.querySelectorAll('button').forEach(x=>x.disabled=true),0)}});</script>")
     return frame("Article editor", "📰 Article editor", body, saved, style)
+
+
+def _variation_picker(p: Dict[str, Any]) -> str:
+    """The "Picture variations" box: for each picture kind of the host with a pool (more than one
+    picture, Hosts > Pictures), small thumbnails to pin one by hand, "automatic" = the draft's seed
+    picks, and 🎲 to re-roll the automatic ones. Empty when no kind has a pool."""
+    rows = []
+    for kind in hosts.POOLED:
+        opts = hosts.variants(p["host"], kind)
+        if len(opts) < 2:
+            continue
+        cur = (p.get("pins") or {}).get(kind, "")
+        cells = [f'<label class=var><input type=radio name="pin_{kind}" value=""{" checked" if not cur else ""}> '
+                 f'<span>auto</span></label>']
+        for vid, _ in opts:
+            img = (f'<img src="/settings/picture/{p["host"]}/{kind}?v={vid}" loading=lazy alt="">'
+                   if hosts.exact(p["host"], kind, vid) else "")
+            cells.append(f'<label class=var><input type=radio name="pin_{kind}" value="{vid}"'
+                         f'{" checked" if cur == vid else ""}>{img}</label>')
+        rows.append(f'<div class=varrow><b>{_e(kind.replace("_", " "))}</b> {"".join(cells)}</div>')
+    if not rows:
+        return ""
+    return ('<div class=variations><p><b>🖼️ Picture variations</b> <small>auto = the system picks one of the '
+            'pictures from the pool and keeps it for this draft</small> '
+            '<button name=action value=reroll_pics class=alt>🎲 Re-roll the automatic ones</button> '
+            '<button name=action value=save class=alt>Apply picks</button></p>' + "".join(rows) + '</div>')
 
 
 def _cover_url(dkey: str, p: Dict[str, Any]) -> str:
@@ -494,6 +534,13 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
         else:
             picks.pop(slot, None)
     p["picks"] = picks
+    for kind in hosts.POOLED:                       # the pool pictures pinned by hand (variation picker)
+        if f"pin_{kind}" in form:
+            v = str(form.get(f"pin_{kind}") or "")
+            if v and v in [vid for vid, _ in hosts.variants(p["host"], kind)]:
+                p.setdefault("pins", {})[kind] = v
+            else:
+                p.setdefault("pins", {}).pop(kind, None)       # "" = automatic (the draft's seed)
     if str(form.get("cover_look") or "") in ("host", "board"):
         p["cover_look"] = str(form.get("cover_look"))
     if str(form.get("cover_figure") or "") in hosts.KINDS:
@@ -584,6 +631,9 @@ def add_routes(app: web.Application, poster: Any) -> None:
                 week, _ = await _article(poster, p)
                 _day_lines(p, week)                 # the day pictures' lines in the new host's voice
                 note = f"{hosts.HOSTS[new]['name']} presents this one now."
+        elif verb == "reroll_pics":             # 🎲: every automatic pool pick changes (pinned ones stay)
+            p["seed"] = int(p.get("seed") or 0) + 1
+            note = "Re-rolled the automatic pictures."
         elif verb == "reroll" and sid in (p.get("candidates") or {}):
             note, anchor = reroll(p, sid), slot_section(sid)
         elif verb == "ask" and sid in (p.get("candidates") or {}):
@@ -624,10 +674,14 @@ def add_routes(app: web.Application, poster: Any) -> None:
         if pic in ("opener", "desk"):
             if poster.shooter is None:
                 raise web.HTTPServiceUnavailable(text="No Chromium for pictures.")
-            png = await poster.shooter.png(host_picker.card_html(p, pic))
+            migrate(p)
+            with _looks(p):
+                png = await poster.shooter.png(host_picker.card_html(p, pic))
             return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
         kind = pic[4:] if pic.startswith("pic:") else ""
-        path: Optional[Any] = hosts.picture(p["host"], kind) if kind in hosts.KINDS else None
+        migrate(p)
+        with _looks(p):
+            path: Optional[Any] = hosts.picture(p["host"], kind) if kind in hosts.KINDS else None
         if path is None:
             raise web.HTTPNotFound()
         return web.FileResponse(path, headers={"Cache-Control": "no-store"})
@@ -648,9 +702,10 @@ def add_routes(app: web.Application, poster: Any) -> None:
             raise web.HTTPServiceUnavailable(text="No Chromium for pictures.")
         week, _ = await _article(poster, p)
         await poster.images.fetch_all(week)         # the stream thumbnails, cached like the board's
-        png = await poster.shooter.png(host_cards.day(p["host"], week, i, poster.images.data_url,
-                                                      host_picker.chosen(p, f"day{i}"),
-                                                      layout=(p.get("day_layouts") or {}).get(str(i)) or p.get("day_layout", "wall")))
+        with _looks(p):
+            png = await poster.shooter.png(host_cards.day(
+                p["host"], week, i, poster.images.data_url, host_picker.chosen(p, f"day{i}"),
+                layout=(p.get("day_layouts") or {}).get(str(i)) or p.get("day_layout", "wall")))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
 
     async def cover_picture(request: web.Request) -> web.Response:
@@ -665,8 +720,9 @@ def add_routes(app: web.Application, poster: Any) -> None:
         week, _ = await _article(poster, p)
         await poster.images.fetch_all(week)
         heading = host_picker.heading_of(p, "Week in Review")
-        png = await poster.shooter.png(host_cards.cover(p["host"], week, poster.images.data_url, heading,
-                                                        p.get("cover_figure") or "happy"), size=(COVER_W, COVER_H))
+        with _looks(p):
+            png = await poster.shooter.png(host_cards.cover(p["host"], week, poster.images.data_url, heading,
+                                                            p.get("cover_figure") or "happy"), size=(COVER_W, COVER_H))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
 
     async def view(request: web.Request) -> web.Response:
