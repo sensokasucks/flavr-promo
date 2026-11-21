@@ -39,7 +39,11 @@ log = logging.getLogger("flavrpromo.kobold")
 CARDS = Path(__file__).resolve().parent / "host_art"
 MAX_CHARS = 300             # longest line kept (the picker's own-line box allows the same)
 PER_SLOT = 3                # lines asked for in each slot
-TIMEOUT = 120               # seconds for one generate call (a CPU-only PC can be slow)
+TIMEOUT = 300               # seconds for one generate call (a big model or a CPU-only PC can be slow)
+# where an answer stops: a new example / the producer speaking, or a chat model's end-of-turn marks.
+# Not a single newline (Sen 2026-11-21: Gemma writes the JSON list one line per item, and a "\n" stop
+# cut every answer down to nothing, so the editor said KoboldCpp "couldn't be reached").
+STOPS = ["<START>", "Producer:", "\n\n\n", "<end_of_turn>", "<|im_end|>", "<|eot_id|>", "</s>"]
 
 # what each picker slot asks the model for (flavrpromo/hosts.py review_candidates)
 ASKS = {
@@ -145,7 +149,12 @@ def fill_ask(ask: str, n: int, heading: str) -> str:
 
 
 def parse(text: str) -> List[str]:
-    """The model's answer (continuing after "[") as clean lines; bad ones are dropped."""
+    """The model's answer (continuing after "[") as clean lines; bad ones are dropped. Copes with a
+    list written one item per line, a ```json fence or a second "[", thinking (<think>...</think>)
+    before it, and a numbered / bulleted list of quoted lines instead of JSON."""
+    text = re.sub(r"(?s)<think>.*?</think>", "", text or "")
+    text = re.sub(r"```(?:json)?", "", text).strip()
+    text = text.lstrip("[").strip()
     body = "[" + text.split("]", 1)[0] + "]"
     try:
         items = json.loads(body)
@@ -170,6 +179,7 @@ class Kobold:
         self.key = key
         self.temperature = temperature      # 0.1 (plain) .. 1.5 (wild); the settings page sets it
         self.per_slot = per_slot            # lines asked for in each slot (1-6)
+        self.last_raw = ""                  # the newest answer as it came (settings page test, picker state)
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.key}"} if self.key else {}
@@ -185,18 +195,24 @@ class Kobold:
         except Exception:
             return ""
 
-    async def generate(self, text: str, max_length: int = 220) -> Optional[str]:
+    async def generate(self, text: str, max_length: int = 0) -> Optional[str]:
+        """KoboldCpp's answer to ``text`` (None = unreachable / an error). ``max_length`` in tokens
+        (0 = enough for per_slot lines: 70 each and some spare)."""
+        max_length = max_length or 70 * self.per_slot + 60
         try:
             async with self.http.post(f"{self.url}/api/v1/generate", headers=self._headers(),
                                       timeout=aiohttp.ClientTimeout(total=TIMEOUT),
                                       json={"prompt": text, "max_length": max_length, "max_context_length": 4096,
                                             "temperature": self.temperature, "top_p": 0.9, "rep_pen": 1.1,
-                                            "stop_sequence": ["\n", "<START>", "Producer:"]}) as r:
+                                            "stop_sequence": STOPS}) as r:
                 if r.status != 200:
                     log.info("KoboldCpp answered HTTP %s", r.status)
                     return None
                 data = await r.json(content_type=None)
-                return str(((data.get("results") or [{}])[0]).get("text") or "")
+                self.last_raw = str(((data.get("results") or [{}])[0]).get("text") or "")
+                if not parse(self.last_raw):
+                    log.info("KoboldCpp gave no usable lines: %r", self.last_raw[:300])
+                return self.last_raw
         except Exception as e:
             log.info("KoboldCpp unreachable: %s", e)
             return None

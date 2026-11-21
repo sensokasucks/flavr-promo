@@ -89,7 +89,7 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
            f' <small>0.5 plain … 1.2 wild</small></label>'
            f'<label>Lines per slot <input name=per_slot type=number min=1 max=6 value="{_e(k["per_slot"])}"></label>'
            f'<p><button name=action value=save>Save</button> <button name=action value=test>Save and test</button></p>'
-           + (f'<p class=test>{_e(test)}</p>' if test else "") + '</form></section>')
+           + (f'<p class=test style="white-space:pre-wrap">{_e(test)}</p>' if test else "") + '</form></section>')
     # hosts on / off
     opts = [("", "Take turns (random, never 3 in a row)")] + [(key, f"Always {h['name']}") for key, h in hosts.HOSTS.items()]
     hst = (f'<section id=hosts><h2>🎙️ Hosts</h2><form method=post action=/settings/hosts>'
@@ -206,6 +206,17 @@ def add_routes(app: web.Application, poster: Any) -> None:
             else:
                 model = await poster.kobold.status()
                 test = f"✅ KoboldCpp answered: {model}" if model else "❌ No answer from KoboldCpp at that address."
+                if model:
+                    # a real request too (example facts, Colette's opener): reaching it isn't enough, the
+                    # answer must be lines this bot can read (kobold.parse); shows the raw answer if not
+                    from .card_page import SAMPLE
+                    k = poster.kobold
+                    got = await k.generate(kobold.prompt("colette", kobold.fill_ask(kobold.asks()["opener"], k.per_slot,
+                                                                                    "week in review"), kobold.facts_text(SAMPLE)))
+                    lines = kobold.parse(got or "")
+                    test += ("\n✨ Test lines: " + " / ".join(lines[:3])) if lines else \
+                        ("\n❌ The test request got no answer (timed out?)." if got is None else
+                         f"\n❌ It answered, but not with lines the bot can read: {got[:300]}")
             raise web.HTTPSeeOther(f"/settings?saved=Saved.&test={quote(test)}#kobold")
         raise _back("KoboldCpp settings saved." if url else "KoboldCpp is off (no address).", "kobold")
 

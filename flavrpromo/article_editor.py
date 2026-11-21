@@ -208,7 +208,7 @@ async def ask_slot(poster: Any, p: Dict[str, Any], slot: str) -> str:
     have = (p.get("candidates") or {}).get(slot) or []
     new = [x for x in kobold.parse(got) if x not in have][:kob.per_slot]
     if not new:
-        return "KoboldCpp answered, but with no usable lines. Try ✨ again."
+        return f"KoboldCpp answered, but with no usable lines. Try ✨ again. Its answer: {got[:200]}"
     p["candidates"][slot] = new + have
     p["ai"] = list(p.get("ai") or []) + new
     p.setdefault("picks", {})[slot] = new[0]
@@ -382,6 +382,8 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
     hopts = "".join(f'<option value="{k}"{" selected" if k == p["host"] else ""}>{_e(x["emoji"])} {_e(x["name"])}</option>'
                     for k, x in hosts.HOSTS.items())
     ai_note = (f'<p class=ai>✨ KoboldCpp: {_e(host_picker.AI_STATES.get(p.get("ai_state") or "", "ready"))}</p>'
+               + (f'<pre class=help style="white-space:pre-wrap">{_e(p.get("ai_raw"))}</pre>'
+                  if p.get("ai_state") == "nolines" and p.get("ai_raw") else "")
                if ai_on else '<p class=help>Set a KoboldCpp address on <a href="/settings#kobold">Settings</a> for ✨ lines.</p>')
     built = time.strftime("%H:%M", time.localtime(float(p.get("built_at") or 0)))
     look = p.get("day_look", "host")

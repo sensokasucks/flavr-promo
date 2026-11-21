@@ -171,7 +171,10 @@ async def _write(poster: Any, k: str, host: str, only: tuple = ()) -> None:
             p["candidates"][slot] = new + p["candidates"][slot]
             ai += new
     p["ai"] = ai
-    p["ai_state"] = "done" if got else "offline"
+    # nothing usable: unreachable, or it answered in a shape parse couldn't read (shown with its answer)
+    raw = str(getattr(poster.kobold, "last_raw", "") or "")
+    p["ai_state"] = "done" if got else "nolines" if raw.strip() else "offline"
+    p["ai_raw"] = "" if got else raw[:300]
     store.put(k, p)
 
 
@@ -244,7 +247,8 @@ def _e(s: Any) -> str:
 
 
 AI_STATES = {"writing": "writing lines… (refresh in a minute or two)", "done": "its lines are marked ✨",
-             "offline": "couldn't be reached, so only the template lines are here"}
+             "offline": "couldn't be reached, so only the template lines are here",
+             "nolines": "answered, but not with lines it could read (its answer is below; try again)"}
 
 
 def _switch(p: Dict[str, Any], name: str, legend: str, options: Any) -> str:

@@ -184,3 +184,26 @@ async def test_live_card_links_the_game_and_shows_genres():
     assert playing.startswith("[Valheim](https://store.steampowered.com/app/892970) · 🆕 NEW GAME")
     assert playing.endswith("*Survival · Adventure*")
     await bot.close()
+
+
+def test_parse_copes_with_chat_models():
+    # Sen 2026-11-21 (Gemma via KoboldCpp): the list one item per line, fences, thinking, a 2nd "["
+    assert kobold.parse('\n  "One line.",\n  "Two line."\n]\n') == ["One line.", "Two line."]
+    assert kobold.parse('```json\n["A.", "B."]\n```') == ["A.", "B."]
+    assert kobold.parse('<think>hmm</think>"Fine."]') == ["Fine."]
+    assert "\n" not in kobold.STOPS                     # a newline mustn't end the answer
+
+
+async def test_generate_sends_stops_and_keeps_the_raw_answer():
+    class Http:
+        def __init__(self):
+            self.json = None
+
+        def post(self, url, headers=None, timeout=None, json=None):
+            self.json = json
+            return FakeResp(200, {"results": [{"text": 'Sorry, here you go: none'}]})
+    h = Http()
+    k = kobold.Kobold(h, "http://k:5001", per_slot=5)
+    got = await k.generate("prompt")
+    assert got == "Sorry, here you go: none" and k.last_raw == got
+    assert h.json["stop_sequence"] == kobold.STOPS and h.json["max_length"] == 70 * 5 + 60
