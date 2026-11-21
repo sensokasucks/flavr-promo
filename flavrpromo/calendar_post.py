@@ -15,7 +15,10 @@ The week's rhythm (times in TZ; CALENDAR_PREVIEW_HOUR, review times with /setup 
                  are the busy days and people have time for VODs; this replaced the Saturday 11 PM
                  recap. The two cover every day once; calendar.py REVIEWS / review_range.)
   With hosts on (/host setup on) a review waits at its time for the owner's picks on the picker
-  page, then posts as host opener card, board, host desk card (flavrpromo/host_picker.py).
+  page, then posts as host opener card, board, host desk card (flavrpromo/host_picker.py). The
+  Sunday board waits the same way for the week-ahead opener card (owner 2026-11-21), but only up
+  to the wait limit (kv host_preview_wait hours, default 3; 0 = for ever): then it posts without
+  the host. Last week's post keeps its edits while it waits.
 A group's posts only start once /setup calendar-channel picks its channel (posted at once, even
 mid-week). If the post is deleted, the next change makes a new one.
 
@@ -29,6 +32,7 @@ Saved in the database (kv):
   calendar_channel.<group>  channel id (/setup calendar-channel)
   calendar_post.<group>     {week, channel, message, sig, drawn_at}: the live board post
   calendar_review.<label>.<group>  the first day (ISO date) of the newest review posted
+  preview_opened.<group>    the week (ISO date) whose host preview opener went out (posted once)
   review_times              {"week": minutes, "weekend": minutes or None = off} (/setup review-times;
                             default 10 AM both: REVIEW_DEFAULTS)
   backfill.<week>           when that week (ISO date of its Sunday) was last filled in from the
@@ -465,6 +469,10 @@ class CalendarPoster:
         # which week the live board shows: a new post for a new week from Sunday PREVIEW_HOUR on
         posted_week = post.get("week") or ""
         new_week_due = posted_week != this_week.date().isoformat() and (wday > 0 or local.hour >= self.preview_hour)
+        if new_week_due and posted_week and not force_new and hosts.enabled(self.store) \
+                and not await self._preview_host(group, channel, this_week.date().isoformat()):
+            await self._edit(group, post)               # still waiting for the picks: last week's post stays
+            return
         if force_new or not post.get("message") or new_week_due:
             if post.get("message") and posted_week and posted_week != this_week.date().isoformat():
                 await self._edit(group, post, final=True)       # last week's post: its final state
@@ -480,6 +488,31 @@ class CalendarPoster:
                     self._share_later(week, png)
             return
         await self._edit(group, post)
+
+    async def _preview_host(self, group: str, channel: str, week_iso: str) -> bool:
+        """The Sunday preview's host opener (flavrpromo/host_picker.py, label "preview"): True = go on
+        and post the new board (the opener went out just now, or the wait limit passed: then the
+        pending preview is dropped and the owner told), False = still waiting for the picks."""
+        if self.store.get(f"preview_opened.{group}") == week_iso:
+            return True                                 # opener already out; the board failed last time
+        picked = await host_picker.ready(self, group, "preview", week_iso)
+        if picked is not None:
+            await host_picker.post_card(self, channel, picked, "opener")
+            host_picker.done(self.store, picked)
+            self.store.put(f"preview_opened.{group}", week_iso)
+            return True
+        p = self.store.get(host_picker.key_of("preview", group)) or {}
+        wait = host_picker.preview_wait(self.store)
+        if not wait or self.clock() - float(p.get("asked_at") or self.clock()) < wait * 3600:
+            return False
+        if p:
+            host_picker.done(self.store, p)
+        try:
+            await self.discord.dm_owner(f"🗓️ No picks for the {host_picker.post_title(group, 'preview')} after "
+                                        f"{wait:g} h, so the new board went up without the host.")
+        except Exception as e:
+            log.info("preview DM failed: %s", e)
+        return True
 
     async def _edit(self, group: str, post: Dict[str, Any], final: bool = False) -> None:
         """Redraw the board post when what it shows changed (or a live preview is stale)."""

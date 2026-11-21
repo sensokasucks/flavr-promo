@@ -13,6 +13,11 @@ With hosts on (/host setup on), a Friday / Monday review doesn't post at its tim
   With KOBOLD_URL set, KoboldCpp writes more lines for every slot in the background as soon as the
   review starts waiting (``start_ai``, flavrpromo/kobold.py); they appear first in each slot with a ✨,
   and the page's "Write more" button asks again. KoboldCpp offline = template lines only.
+  The Sunday preview (label "preview", owner 2026-11-21) works the same way with the week ahead's
+  facts (hosts.preview_facts): an opener card only (no desk card), then the new week's board.
+  Unlike a review, the board is the week's main post, so after the owner's wait limit (kv
+  host_preview_wait hours, default PREVIEW_WAIT; settings page, Hosts; 0 = wait for ever) it posts
+  on its own without the host (flavrpromo/calendar_post.py ``refresh``).
   An hour after the first DM, if nothing is picked, one more DM nudges (NUDGE_AFTER). Nothing ever
   posts without the owner's picks; a review that is never picked simply never posts. /calendar
   post review: (by hand) still posts the plain review at once.
@@ -39,7 +44,9 @@ from . import groups, host_cards, hosts
 log = logging.getLogger("flavrpromo.host_picker")
 NUDGE_AFTER = 3600.0            # seconds after the first DM before the one reminder
 INDEX = "host_reviews"          # kv: the pending review keys, for the picker page
-HEADINGS = {"week": "Week in Review", "weekend": "Weekend in Review"}
+HEADINGS = {"week": "Week in Review", "weekend": "Weekend in Review", "preview": "Week Ahead"}
+PREVIEW_WAIT = 3                # hours the Sunday board waits for the preview picks (kv host_preview_wait)
+PREVIEW_SLOTS = ("opener", "note")  # the preview's slots (no desk card): what KoboldCpp is asked for
 _tasks: Dict[str, "asyncio.Task[None]"] = {}     # KoboldCpp writing for a pending review (key → task)
 
 
@@ -56,9 +63,34 @@ def waiting(store: Any) -> List[str]:
     return _index(store)
 
 
+def post_title(group: str, label: str) -> str:
+    """What a pending post is called in DMs and on the picker page: "FlaVR week in review",
+    "FlaVR week ahead" (the Sunday preview)."""
+    return f"{groups.name(group)} week ahead" if label == "preview" else groups.heading(group, True, label)
+
+
+def candidates(key: str, p: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Every slot's template lines for host ``key``: the preview's (opener + notes) or a review's."""
+    f = p.get("facts") or {}
+    return hosts.preview_candidates(key, f) if p.get("label") == "preview" else hosts.review_candidates(key, f)
+
+
+def preview_wait(store: Any) -> float:
+    """Hours the Sunday board waits for the preview picks (settings page, Hosts); 0 = for ever."""
+    v = store.get("host_preview_wait")
+    return float(PREVIEW_WAIT if v is None else v)
+
+
 def make(store: Any, group: str, label: str, week: Any, start_iso: str, host: str = "") -> Dict[str, Any]:
-    """A fresh pending review: host, facts, notes and candidate lines (nothing picked)."""
+    """A fresh pending review (or Sunday preview, ``label`` "preview"): host, facts, notes and
+    candidate lines (nothing picked)."""
     key = host or hosts.choose(store)
+    if label == "preview":
+        f = hosts.preview_facts(week)
+        return {"group": group, "label": label, "start": start_iso, "host": key, "facts": f,
+                "notes": hosts.preview_notes(f), "candidates": hosts.preview_candidates(key, f), "picks": {},
+                "ready": False, "asked_at": time.time(), "nudged": False,
+                "opener_kind": random.choice(("pose", "chibi"))}
     f = hosts.facts(store, week)
     # regular or chibi picture on each card, picked at random so the two mix (Sen 2026-11-21); the
     # picker page's "opener picture" / "desk picture" switches change them
@@ -77,13 +109,17 @@ async def ready(poster: Any, group: str, label: str, start_iso: str) -> Optional
     if p and p.get("start") != start_iso:
         p = None                                    # an older review never picked: replaced by this one
     if not p:
-        await poster.backfill_review(label)
-        p = make(store, group, label, poster.build_review(group, label), start_iso)
+        if label == "preview":                      # the new week's board as it stands (nothing to fill in)
+            week = poster.build(group, poster.week_of(0))
+        else:
+            await poster.backfill_review(label)
+            week = poster.build_review(group, label)
+        p = make(store, group, label, week, start_iso)
         p["asked_at"] = poster.clock()               # the calendar's clock (tests set it)
         store.put(k, p)
         store.put(INDEX, sorted(set(_index(store)) | {k}))
         ai = start_ai(poster, k)
-        await _dm(poster, f"🎙️ The {groups.heading(group, True, label)} is ready for {hosts.HOSTS[p['host']]['name']}. "
+        await _dm(poster, f"🎙️ The {post_title(group, label)} is ready for {hosts.HOSTS[p['host']]['name']}. "
                           f"Pick the lines and it posts: {link(poster)}"
                           + (" (KoboldCpp is writing more lines; they show up on the page in a few minutes)" if ai else ""))
         return None
@@ -92,7 +128,7 @@ async def ready(poster: Any, group: str, label: str, start_iso: str) -> Optional
     if not p.get("nudged") and poster.clock() - float(p.get("asked_at") or 0) >= NUDGE_AFTER:
         p["nudged"] = True
         store.put(k, p)
-        await _dm(poster, f"⏰ The {groups.heading(group, True, label)} is still waiting for your picks: {link(poster)}")
+        await _dm(poster, f"⏰ The {post_title(group, label)} is still waiting for your picks: {link(poster)}")
     return None
 
 
@@ -107,6 +143,8 @@ def start_ai(poster: Any, k: str, only: tuple = ()) -> bool:
     p = poster.store.get(k)
     if not p:
         return False
+    if not only and p.get("label") == "preview":
+        only = PREVIEW_SLOTS                        # no desk card on the preview: don't ask for its lines
     p["ai_state"] = "writing"
     poster.store.put(k, p)
     _tasks[k] = asyncio.get_running_loop().create_task(_write(poster, k, p["host"], only))
@@ -167,10 +205,13 @@ def card_html(p: Dict[str, Any], card: str) -> str:
     key, f = p["host"], p.get("facts") or {}
     if card == "opener":
         notes = p.get("notes") or []
-        pose = p.get("pose") if p.get("pose") in hosts.POSES else hosts.pose(f)
+        preview = p.get("label") == "preview"
+        # the preview points at the week ahead (sleepy when nothing is planned yet)
+        pose = p.get("pose") if p.get("pose") in hosts.POSES else \
+            ("sleepy" if not f.get("planned") else "pointing") if preview else hosts.pose(f)
         return host_cards.opener(key, heading_of(p), str(f.get("range") or ""),
                                  chosen(p, "opener"), notes, [chosen(p, f"note{i}") for i in range(len(notes))],
-                                 pose, p.get("opener_kind") == "chibi")
+                                 pose, p.get("opener_kind") == "chibi", preview=preview)
     return host_cards.desk(key, chosen(p, "desk_highlight"), chosen(p, "desk_nudge"), chosen(p, "desk_signoff"),
                            p.get("desk_kind") or "desk")
 
@@ -220,6 +261,7 @@ def page(store: Any, saved: str = "", ai_on: bool = False) -> str:
     for k in _index(store):
         p = store.get(k)
         h = hosts.HOSTS[p["host"]]
+        preview = p.get("label") == "preview"       # the Sunday preview: opener card only
         slots = []
         for slot, cands in (p.get("candidates") or {}).items():
             title = slot.replace("_", " ")
@@ -239,7 +281,7 @@ def page(store: Any, saved: str = "", ai_on: bool = False) -> str:
             slots.append(f"<fieldset><legend>{_e(title)}</legend>{opts}</fieldset>")
         q = f"key={quote(k)}&t={int(time.time())}"
         blocks.append(
-            f'<section><h2>{_e(groups.heading(p["group"], True, p["label"]))} · {_e(p["facts"].get("range"))}</h2>'
+            f'<section><h2>{_e(post_title(p["group"], p["label"]))} · {_e(p["facts"].get("range"))}</h2>'
             f'<form method=post><input type=hidden name=key value="{_e(k)}">'
             f'<p>Host: <b>{_e(h["emoji"])} {_e(h["name"])}</b> <button name=action value=swap>Swap host</button></p>'
             + (f'<p class=ai>✨ KoboldCpp: {_e(AI_STATES.get(p.get("ai_state") or "", "ready"))} '
@@ -247,11 +289,12 @@ def page(store: Any, saved: str = "", ai_on: bool = False) -> str:
             + "".join(slots)
             # each card's picture: regular or chibi (hosts.py kinds; the other one peeks on the opener)
             + _switch(p, "opener_kind", "opener picture", (("pose", "regular"), ("chibi", "chibi")))
-            + _switch(p, "desk_kind", "desk picture", (("desk", "regular"), ("chibi_desk", "chibi")))
+            + ("" if preview else _switch(p, "desk_kind", "desk picture", (("desk", "regular"), ("chibi_desk", "chibi"))))
             + f'<p><button name=action value=save>Save and preview</button> '
             f'<button name=action value=post class=go>Post it</button></p></form>'
             f'<div class=prev><img src="/hosts/preview.png?{q}&card=opener" alt="opener preview">'
-            f'<img src="/hosts/preview.png?{q}&card=desk" alt="desk preview"></div></section>')
+            + ("" if preview else f'<img src="/hosts/preview.png?{q}&card=desk" alt="desk preview">')
+            + '</div></section>')
     body = "".join(blocks) or "<p>Nothing is waiting for picks right now.</p>"
     note = f'<p class=saved>{_e(saved)}</p>' if saved else ""
     return ("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width'>"
@@ -284,7 +327,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         elif action == "swap":
             others = [h for h in hosts.HOSTS if h != p["host"]] or [p["host"]]
             p["host"] = others[0]
-            p["candidates"] = hosts.review_candidates(p["host"], p["facts"])
+            p["candidates"] = candidates(p["host"], p)
             p["picks"], p["ai"] = {}, []
             msg = f"Swapped to {hosts.HOSTS[p['host']]['name']}."
         else:
@@ -303,7 +346,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
             msg = "Saved."
             if action == "post":
                 p["ready"] = True
-                msg = "Posting now: opener, board, then the desk card."
+                msg = "Posting now: opener, then the board." if p.get("label") == "preview" else \
+                    "Posting now: opener, board, then the desk card."
         store.put(k, p)
         if action == "swap" or action == "ai":          # new lines from KoboldCpp for this host
             if start_ai(poster, k):

@@ -54,8 +54,10 @@ def _doc(body_style: str, inner: str) -> str:
 
 
 def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[str, str]],
-           comments: List[str], pose: str, chibi_main: bool = False) -> str:
+           comments: List[str], pose: str, chibi_main: bool = False, preview: bool = False) -> str:
     """The opener card. ``notes``: hosts.notes() rows; ``comments``: the picked comment for each.
+    ``preview``: the Sunday preview's opener (hosts.preview_notes rows; the board follows, no desk
+    card after it, so the footer and Clark's report header say so).
     ``chibi_main``: the big figure is the chibi and the regular pose peeks (picker page "opener
     picture"; Sen 2026-11-21: chibis mixed in with the regular pictures)."""
     big, small = (f"chibi_{pose}", pose) if chibi_main else (pose, f"chibi_{pose}")
@@ -82,12 +84,12 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
                  f'<div class=serif style="position:absolute;left:{left}px;top:170px;width:{width}px;height:660px;background:#f4ead8;'
                  f'color:#2b1d12;border-radius:6px;box-shadow:0 10px 30px #000a;padding:36px 44px">'
                  f'<div style="display:flex;justify-content:space-between;font-size:20px;letter-spacing:2px;color:#8a5a33;'
-                 f'border-bottom:2px solid #c9a77c;padding-bottom:10px"><span>REPORT · {_e(range_text.upper())}</span>'
-                 f'<span>STATUS: IN ORDER 🍎</span></div>'
+                 f'border-bottom:2px solid #c9a77c;padding-bottom:10px"><span>{"SCHEDULE" if preview else "REPORT"} · {_e(range_text.upper())}</span>'
+                 f'<span>STATUS: {"ON FILE" if preview else "IN ORDER"} 🍎</span></div>'
                  f'<div style="font-size:30px;line-height:1.45;margin-top:22px">{_e(line)}</div>'
                  f'<table style="margin-top:26px;font-size:24px;border-collapse:collapse;width:100%">{table}</table>'
                  f'<div style="position:absolute;right:40px;bottom:30px;font-size:21px;color:#8a5a33;font-style:italic">'
-                 f'The full board follows. — C.</div></div>')
+                 f'{"The week\'s board follows. — C." if preview else "The full board follows. — C."}</div></div>')
         return _doc("background:linear-gradient(135deg,#1c130d,#3a2416 70%,#4a2a14);color:#f3e6d3", inner)
     # Colette
     img = f'<img src="{pic}" style="position:absolute;left:40px;top:160px;height:700px;max-width:420px;object-fit:contain;object-position:bottom">' if pic else ""
@@ -103,7 +105,7 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
              f'with Colette Cappuccino · Marketing · {_e(range_text)}</div>{img}{peek}'
              f'<div class=bub style="left:{left}px;top:170px;width:{width}px;border:5px solid #f72ca2">{_e(line)}</div>'
              f'{stickies}<div style="position:absolute;left:{left + 20}px;top:790px;font-size:24px;color:#ddd">'
-             f'Full board in the next picture ↓ &nbsp; My notes at the end!</div>')
+             f'{"This week\'s board in the next picture ↓ &nbsp; See you there!!" if preview else "Full board in the next picture ↓ &nbsp; My notes at the end!"}</div>')
     return _doc("background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a);color:#fff", inner)
 
 
