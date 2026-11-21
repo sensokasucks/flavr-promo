@@ -101,10 +101,13 @@ def parse(text: str) -> List[str]:
 class Kobold:
     """One KoboldCpp server (KOBOLD_URL). Every call fails soft: offline = no AI lines, never an error."""
 
-    def __init__(self, http: aiohttp.ClientSession, url: str, key: str = ""):
+    def __init__(self, http: aiohttp.ClientSession, url: str, key: str = "", temperature: float = 0.8,
+                 per_slot: int = PER_SLOT):
         self.http = http
         self.url = url.rstrip("/")
         self.key = key
+        self.temperature = temperature      # 0.1 (plain) .. 1.5 (wild); the settings page sets it
+        self.per_slot = per_slot            # lines asked for in each slot (1-6)
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.key}"} if self.key else {}
@@ -125,7 +128,7 @@ class Kobold:
             async with self.http.post(f"{self.url}/api/v1/generate", headers=self._headers(),
                                       timeout=aiohttp.ClientTimeout(total=TIMEOUT),
                                       json={"prompt": text, "max_length": max_length, "max_context_length": 4096,
-                                            "temperature": 0.8, "top_p": 0.9, "rep_pen": 1.1,
+                                            "temperature": self.temperature, "top_p": 0.9, "rep_pen": 1.1,
                                             "stop_sequence": ["\n", "<START>", "Producer:"]}) as r:
                 if r.status != 200:
                     log.info("KoboldCpp answered HTTP %s", r.status)
@@ -146,10 +149,10 @@ class Kobold:
         asks += [(s, ASKS[s]) for s in ("desk_highlight", "desk_nudge", "desk_signoff")]
         out: Dict[str, List[str]] = {}
         for slot, ask in asks:
-            got = await self.generate(prompt(key, ask.format(n=PER_SLOT, heading=heading.lower()), text))
+            got = await self.generate(prompt(key, ask.format(n=self.per_slot, heading=heading.lower()), text))
             if got is None:
                 break                       # offline or failing: stop asking for this review
             lines = parse(got)
             if lines:
-                out[slot] = lines[:PER_SLOT]
+                out[slot] = lines[:self.per_slot]
         return out

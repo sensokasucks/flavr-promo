@@ -138,6 +138,19 @@ def save_picture(key: str, kind: str, data: bytes, filename: str) -> str:
     return ""
 
 
+def remove_picture(key: str, kind: str) -> bool:
+    """The settings page's "back to built-in": delete the uploaded picture of this kind (True if one was there)."""
+    if _folder is None or key not in HOSTS or kind not in KINDS:
+        return False
+    gone = False
+    for ext in EXTS:
+        f = _folder / key / f"{kind}{ext}"
+        if f.is_file():
+            f.unlink()
+            gone = True
+    return gone
+
+
 def pictures(key: str) -> Dict[str, str]:
     """/host list: for each kind "yours" (uploaded), "built-in" or "" (exact files, no fallback)."""
     out = {}
@@ -232,6 +245,62 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
 }
 
 
+# every blank a template may use (the settings page refuses others, so a line never shows "{oops}")
+BLANKS = ("name", "game", "tag", "length", "signoff", "genre", "streams", "streams_text", "hours", "top_name",
+          "top_count", "longest_name", "longest_len", "quiet_day", "quiet_name", "new_game", "new_game_name",
+          "when", "when_lower", "count", "first_name", "first_time")
+# what each slot is for, and its useful blanks (the settings page's help text)
+SLOT_HELP = {
+    "live_start": "go-live, no game known: {name}",
+    "live_game": "go-live with a game: {name} {game}",
+    "live_new_game": "go-live, first time with this game: {name} {game}",
+    "live_new_genre": "the same, when the genre is known: {name} {game} {genre}",
+    "live_part": "go-live, a game they've played before: {name} {game} {tag}",
+    "live_change": "they switched game mid-stream: {name} {game}",
+    "live_end": "stream ended: {name} {length}",
+    "live_end_long": "stream ended after 4 h or more: {name} {length}",
+    "live_end_signoff": "stream ended, with their sign-off line: {name} {length} {signoff}",
+    "open_busy": "review opener, busy (8+ streams or 20+ h): {streams} {hours} {top_name} {top_count}",
+    "open_normal": "review opener: {streams} {hours} {longest_name} {longest_len}",
+    "open_quiet": "review opener, 1-2 streams: {streams_text}",
+    "open_empty": "review opener, no streams",
+    "note_longest": "short comment on the longest stream note",
+    "note_most": "short comment on the most shows note",
+    "note_quiet": "short comment on a quiet day note",
+    "note_new_game": "short comment on the new game note",
+    "desk_highlight": "desk card highlight: {longest_name} {longest_len} {top_name} {top_count} {new_game} {new_game_name}",
+    "desk_nudge": "desk card 'next time': {quiet_name}",
+    "desk_signoff": "desk card sign-off",
+    "day_one": "day post with one stream: {when} {when_lower} {first_name} {first_time}",
+    "day_many": "day post with more: {when} {when_lower} {count} {first_name} {first_time}",
+}
+# the settings page's edits (kv host_templates {host: {slot: [lines]}}); a slot there replaces TEMPLATES'
+_overrides: Dict[str, Dict[str, List[str]]] = {}
+
+
+def load_overrides(store: Store) -> None:
+    """Read the edited lines (flavrpromo/__main__.py at start, flavrpromo/settings_page.py after a save)."""
+    global _overrides
+    raw = store.get("host_templates") or {}
+    _overrides = {k: {s: [str(x) for x in v] for s, v in (raw.get(k) or {}).items() if isinstance(v, list)}
+                  for k in HOSTS}
+
+
+def templates(key: str, slot: str) -> List[str]:
+    """A slot's template lines: the settings page's edit when there is one, else the built-in ones."""
+    own = (_overrides.get(key) or {}).get(slot)
+    return own if own else TEMPLATES.get(key, {}).get(slot, [])
+
+
+def bad_blanks(line: str) -> List[str]:
+    """Blanks in ``line`` that aren't in BLANKS ("" for a broken brace), for the settings page."""
+    try:
+        names = [f for _, f, _, _ in string.Formatter().parse(line) if f is not None]
+    except ValueError:
+        return ["{"]
+    return [n for n in names if n not in BLANKS]
+
+
 class _Blanks(dict):
     def __missing__(self, key):
         raise KeyError(key)
@@ -251,7 +320,7 @@ def fill(template: str, facts: Dict[str, Any]) -> Optional[str]:
 def lines(key: str, slot: str, facts: Dict[str, Any]) -> List[str]:
     """Every usable line for a slot, in template order, no duplicates."""
     out: List[str] = []
-    for t in TEMPLATES.get(key, {}).get(slot, []):
+    for t in templates(key, slot):
         s = fill(t, facts)
         if s and s not in out:
             out.append(s)

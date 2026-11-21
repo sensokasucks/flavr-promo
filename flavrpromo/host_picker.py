@@ -251,7 +251,8 @@ def page(store: Any, saved: str = "", ai_on: bool = False) -> str:
             "button{padding:8px 14px;border-radius:8px;border:0;font-weight:bold}.go{background:#f72ca2;color:#fff}"
             ".ai{color:#b7ef33}.prev img{width:100%;margin-top:10px;border-radius:8px}.saved{background:#2ae0d4;color:#000;padding:8px;"
             "border-radius:8px}section{border-bottom:2px solid #444;padding-bottom:20px}</style></head><body>"
-            f"<h1>🎙️ Host line picker</h1>{note}{body}</body></html>")
+            f"<h1>🎙️ Host line picker</h1><p><a style=color:#2ae0d4 href=/settings>Settings</a> (KoboldCpp, "
+            f"hosts, pictures, lines)</p>{note}{body}</body></html>")
 
 
 def add_routes(app: web.Application, poster: Any) -> None:

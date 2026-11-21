@@ -1150,6 +1150,8 @@ class PromoBot(discord.Client):
                 lines.append(f"{h['emoji']} **{h['name']}** ({h['role']}): "
                              + " · ".join(f"{kind} {'✅ yours' if has == 'yours' else '✅' if has else '—'}"
                                           for kind, has in have.items()))
+            if bot.calendar:
+                lines.append(f"Pictures, lines and KoboldCpp: {(bot.calendar.web_url or 'http://<this PC>:3871')}/settings")
             waiting = host_picker.waiting(bot.store)
             if waiting and bot.calendar:
                 lines.append(f"{len(waiting)} review(s) waiting for your picks: {host_picker.link(bot.calendar)}")
