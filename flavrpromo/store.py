@@ -206,6 +206,10 @@ ADDED_COLUMNS = (
     # go-live cards beyond the first (post_channel / post_message): JSON [[channel, message], ...], so
     # the card in a talent's own channel is edited and ended with the group one (flavrpromo/bot.py)
     ("sessions", "extra_posts", "TEXT NOT NULL DEFAULT '[]'"),
+    # the host who presents this stream's go-live card ("colette" / "clark", "" = none; flavrpromo/hosts.py)
+    # and the game their line last spoke about, so a new line comes only when the game changes
+    ("sessions", "host", "TEXT NOT NULL DEFAULT ''"),
+    ("sessions", "host_game", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

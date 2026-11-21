@@ -35,7 +35,7 @@ import mimetypes
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import aiohttp
 
@@ -447,11 +447,12 @@ GRID_W, GRID_H = WIDTH - 80, 750      # the tile area under the heading (body pa
 GRID_GAP_X, GRID_GAP_Y = 18, 16
 
 
-def tile_layout(n: int) -> tuple:
+def tile_layout(n: int, grid_w: int = GRID_W) -> tuple:
     """(columns, rows, tile width px, label font px) for ``n`` tiles on a day / focus picture.
     Every tile keeps the 16:9 shape of a stream thumbnail (a wider box would crop the picture's top
     and bottom, Sen 2026-11-19), so the columns are picked to make the tiles as big as fits, and the
-    grid is centred (empty space at the sides or bottom rather than cut-off thumbnails)."""
+    grid is centred (empty space at the sides or bottom rather than cut-off thumbnails). ``grid_w``:
+    the width the tiles may use (less when a day post's host takes the right-hand column)."""
     n = max(1, n)
     best = (1, 1, 0, 24)
     for cols in range(1, min(n, 6) + 1):
@@ -459,21 +460,33 @@ def tile_layout(n: int) -> tuple:
         label = 24 if rows <= 2 else 20 if rows <= 3 else 16
         under = 2 * label + 12                                  # name + time lines under each tile
         high = (GRID_H - GRID_GAP_Y * (rows - 1)) / rows - under
-        wide = (GRID_W - GRID_GAP_X * (cols - 1)) / cols
+        wide = (grid_w - GRID_GAP_X * (cols - 1)) / cols
         w = int(min(wide, high * 16 / 9))
         if w > best[2]:
             best = (cols, rows, w, label)
     return best
 
 
+HOST_W = 330        # px column on the right for a day post's host (chibi + bubble) ...
+HOST_MAX_TILES = 4  # ... with this many tiles or fewer; more tiles = a small header badge instead
+
+
 def tiles_card(group: str, heading: str, tiles: List[Tile], tz, img: Img, logo: str = "",
-               show_day: bool = False) -> str:
+               show_day: bool = False, host: Optional[Dict[str, str]] = None) -> str:
     """Streams in a 16:9 grid under a big ``heading``: the day picture above (``day_card``) and the
     focus pictures ("TODAY · THU NOV 19", "THIS WEEKEND", flavrpromo/focus.py). ``show_day``: each
-    stream's time starts with its weekday (a picture covering more than one day)."""
+    stream's time starts with its weekday (a picture covering more than one day). ``host``: a day
+    post's host (flavrpromo/focus.py): {"chibi": data URL or "", "line", "accent"}; with few tiles the
+    chibi stands in the free side space under a speech bubble, else a small chibi + line sit in the
+    header (owner 2026-11-20 mock-ups bot-presenter/live-and-daily/)."""
     e = html.escape
     shown = tiles if len(tiles) <= DAY_MAX else tiles[:DAY_MAX - 1]
-    cols, rows, tw, label = tile_layout(len(shown) + (len(tiles) > len(shown)))
+    count = len(shown) + (len(tiles) > len(shown))
+    big_host = bool(host and host.get("line")) and count <= HOST_MAX_TILES
+    cols, rows, tw, label = tile_layout(count, GRID_W - (HOST_W if big_host else 0))
+    grid_w = cols * tw + (cols - 1) * GRID_GAP_X
+    # centred in the space left of the host column (or in the whole width without one)
+    grid_left = ((GRID_W - (HOST_W if big_host else 0)) - grid_w) // 2
     cells = ""
     for k, t in enumerate(shown):
         src = img(t.thumb) or img(t.avatar)
@@ -489,6 +502,20 @@ def tiles_card(group: str, heading: str, tiles: List[Tile], tz, img: Img, logo: 
         cells = '<div class="c more">Nothing on the calendar yet</div>'
     head = (f'<img class="logo" src="{e(logo, quote=True)}">' if logo and group == "flavr" else
             f"<em>{e(groups.name(group))}</em>")
+    corner = badge = ""
+    if host and host.get("line"):
+        acc = e(host.get("accent") or "#f72ca2", quote=True)
+        chibi = (f'<img src="{e(host["chibi"], quote=True)}" style="{{pos}};object-fit:contain">'
+                 if host.get("chibi") else "")
+        if big_host:
+            w = HOST_W - 20
+            corner = (chibi.replace("{pos}", f"position:absolute;right:40px;bottom:40px;width:{w}px;height:360px;"
+                                             "object-position:bottom")
+                      + f'<div class="hb" style="right:40px;bottom:{410 if chibi else 60}px;width:{w}px;'
+                        f'border-color:{acc}">{e(host["line"])}</div>')
+        else:
+            badge = (chibi.replace("{pos}", "height:64px;max-width:90px")
+                     + f'<div class="hs" style="border-color:{acc}">{e(host["line"])}</div>')
     css = (":root{" + theme(group) + "}*{box-sizing:border-box;margin:0}html,body{background:#0e0f14}"
            f"body{{width:{WIDTH}px;height:{HEIGHT}px;overflow:hidden;padding:30px 40px;color:#eef;"
            'font-family:"DejaVu Sans","Noto Sans","Noto Sans CJK JP",Arial,sans-serif;'
@@ -500,7 +527,7 @@ def tiles_card(group: str, heading: str, tiles: List[Tile], tz, img: Img, logo: 
            "header span{margin-left:auto;font-size:22px;color:#aab}"
            # a wrapping row exactly ``cols`` tiles wide, centred both ways: a short last row sits in the middle
            f".g{{display:flex;flex-wrap:wrap;justify-content:center;align-content:center;gap:{GRID_GAP_Y}px {GRID_GAP_X}px;"
-           f"height:{GRID_H}px;width:{cols * tw + (cols - 1) * GRID_GAP_X}px;margin:0 auto}}"
+           f"height:{GRID_H}px;width:{grid_w}px;margin:0 0 0 {grid_left}px}}"
            f".c{{display:flex;flex-direction:column;width:{tw}px}}"
            ".c i{display:block;aspect-ratio:16/9;border-radius:12px;background:#1b1d26 center/cover no-repeat;"
            "border:3px solid var(--c1);position:relative}"
@@ -510,11 +537,19 @@ def tiles_card(group: str, heading: str, tiles: List[Tile], tz, img: Img, logo: 
            f".c.more{{align-items:center;justify-content:center;font-size:28px;color:#aab;height:{round(tw * 9 / 16)}px}}"
            ".plat{position:absolute;top:8px;right:8px;width:26px;height:26px;border-radius:6px;font-size:14px;font-weight:800;"
            "display:inline-flex;align-items:center;justify-content:center;margin-left:4px}"
-           ".c i .plat+.plat{right:38px}")
+           ".c i .plat+.plat{right:38px}"
+           # the host's speech bubble (corner) and header line (badge)
+           ".hb{position:absolute;background:#fff;color:#1a1a1a;border:4px solid;border-radius:22px;padding:14px 18px;"
+           "font-size:21px;line-height:1.3;font-weight:700}"
+           ".hs{max-width:520px;font-size:18px;line-height:1.25;color:#eef;border-left:4px solid;padding-left:10px;"
+           "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}")
+    # the header's right end: the host badge (busy days) or the stream count
+    right = (f'<span style="display:flex;align-items:center;gap:10px">{badge}</span>' if badge else
+             f'<span>{len(tiles)} stream{"s" if len(tiles) != 1 else ""}</span>')
     return (f'<!doctype html><html><head><meta charset="utf-8"><style>{css}</style></head><body>'
             f'<header>{head}<h1>{e(heading)}</h1>'
-            f'<span>{len(tiles)} stream{"s" if len(tiles) != 1 else ""}</span></header>'
-            f'<div class="g">{cells}</div></body></html>')
+            f'{right}</header>'
+            f'<div class="g">{cells}</div>{corner}</body></html>')
 
 
 # ── the picture ────────────────────────────────────────────────────────

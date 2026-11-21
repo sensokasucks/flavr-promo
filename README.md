@@ -23,14 +23,15 @@ by side and don't need each other; with both, FlaVR Bot asks FlaVR Promo whether
 | **Groups** | FlaVR, Friends and Community are built in; `/group add Art Pals #ff8800` makes your own, each with its own go-live channel, calendar board, reviews and share text. `/friend group` moves someone, `/group edit` renames or recolours (the built-in three too; FlaVR's board keeps the logo colours), `/group remove` deletes one and moves its people to Friends, `/group list` shows people and channels. | owner or Manage Server |
 | **Calendar page + feed** | `http://<this PC>:3871/calendar` (live page, also an OBS Browser Source, `?group=friends` or a custom group's name, `?week=next`), `/calendar.png`, and `/calendar.ics` to add to Google / Apple Calendar on the home network | — |
 | **Your DMs** | DMs you (so the Discord app on your phone buzzes): friends going live (one list every 10 minutes, off by default), calendar changes with the new picture, and the copy-ready share text after the Sunday post and each review. Quiet hours (`QUIET_HOURS`) hold them, except while you're live. `/pings` switches them. | — |
+| **Hosts** | Two presenters, **Colette Cappuccino** (Marketing, loud and caffeinated, sticky notes) and **Clark** (Division Clerk, calm and dry, a filed report), take turns at random (never the same one three times in a row). Off until `/host setup on` (`only:` keeps one host). Go-live cards get the host's line above them ("☕ **Colette Cappuccino:** NEW GAME ALERT!! ..."), a new line when the game changes, and a closing line that reads out the sign-off line. Reviews **wait for your picks**: at review time the bot DMs you a link to `http://<this PC>:3871/hosts/pick` (one reminder after an hour), where you pick a line for each slot or type your own, can swap the host, preview the two cards and press **Post it**. Then the host's **opener card** (pose picture, their line, up to 3 highlights), the normal board and the host's **desk card** (highlight, a nudge for next time, sign-off) post in that order (1600 x 900, safe for X). A review you never pick never posts; `/calendar post review:` still posts the plain review at once. Both hosts' pictures are built in (`flavrpromo/host_art`, transparent WebP: poses happy / pointing / sleepy, desk, head, and chibi happy / pointing / sleepy / desk / head); `/host picture` replaces any one with your own upload (kept in `DATA_DIR/hosts`). Each review picks regular or chibi pictures at random for the opener and the desk card (the other style peeks on the opener); the picker page has a switch for each. The chibi peeks over the opener card, is the go-live face when there's no head picture, and presents the automatic **day posts** (a line on top of the post; in the picture a bubble and the chibi in a side column with up to 4 streams, a small badge in the header with more); `/host list` shows what's there, `/host preview` draws a card. | `/host setup on`, pictures optional |
 | **/status** | The watcher (each platform's last check), who's live, and this PC's uptime, load and disk | — |
 
 Only official, documented platform APIs are used, at a polite pace (Twitch every 2 minutes in one
 call for up to 100 people, YouTube RSS + one API call every 10 minutes, Kick every 3 minutes).
 The bot needs no privileged Discord intents.
 
-Planned (plan doc "FlaVR Bot presenter plan"): Steam look-ups for game details, then two hosts
-(Colette and Clark) who present the reports, with lines you pick on a local page.
+Planned (plan doc "FlaVR Bot presenter plan"): host lines written by KoboldCpp (on its own PC) next
+to the templates on the picker page, and Steam look-ups for game details.
 
 ## Set up
 
@@ -69,7 +70,8 @@ Code map: `flavrpromo/__main__.py` (start-up and wiring), `config.py` (environme
 server, `/health`, `/live.json`), `pings.py` (your DMs), `watcher.py` + `platforms/` (go-live),
 `bot.py` (Discord), `sysinfo.py`; the calendar is `calendar.py` (which streams go on which day),
 `render.py` (the HTML board and its picture, Playwright Chromium), `calendar_post.py` (Discord posts,
-reviews, pings), `focus.py` (day posts), `share.py` (Discord / X text), `signoff.py` (sign-off lines), `games.py` (game history and tags), `talent.py`, `promo.py`
+reviews, pings), `focus.py` (day posts), `share.py` (Discord / X text), `signoff.py` (sign-off lines), `games.py` (game history and tags), `hosts.py` +
+`host_cards.py` + `host_picker.py` (Colette and Clark, their cards, the review line picker), `talent.py`, `promo.py`
 (community calendar), `groups.py` and `web.py` (page, picture, .ics, X Article). The calendar
 picture needs `playwright install chromium` outside Docker (or `CHROMIUM_PATH`); without it posts
 go out as text only.
