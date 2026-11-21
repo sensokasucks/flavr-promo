@@ -51,12 +51,28 @@ class FakeKobold(kobold.Kobold):
 
 
 async def test_write_asks_each_slot_and_stops_when_offline():
-    k = FakeKobold(['"A line."]', '"note!"]', '"note two"]'])
+    # one request per line (per_slot 2 here): a paragraph comes back as one line, never split up
+    k = FakeKobold(['"A line.", "Then more."]', '"Other one."]', '"note!"]', '"note!"]', '"note two"]'])
+    k.per_slot = 2
     got = await k.write("colette", {"streams": 3, "hours": 5}, "Week in Review",
                         [{"label": "LONGEST STREAM", "value": "Lulu · 2 h"}, {"label": "MOST SHOWS", "value": "Lulu · 2"}])
-    assert got == {"opener": ["A line."], "note0": ["note!"], "note1": ["note two"]}
-    assert "longest stream: Lulu · 2 h" in k.prompts[1]
-    assert len(k.prompts) == 4                         # the 4th answered None (offline): no more asks
+    assert got == {"opener": ["A line. Then more.", "Other one."], "note0": ["note!"], "note1": ["note two"]}
+    assert "longest stream: Lulu · 2 h" in k.prompts[2]
+    assert len(k.prompts) == 7                         # the 7th answered None (offline): no more slots asked
+
+
+def test_as_line_joins_a_split_paragraph_and_cuts_long_ones():
+    assert kobold.as_line('"Monday is busy!", "Then Cara is on deck."]') == "Monday is busy! Then Cara is on deck."
+    assert kobold.as_line("Just plain words.") == "Just plain words."
+    long = kobold.as_line('"' + "word " * 300 + '"]')
+    assert len(long) <= kobold.MAX_CHARS + 1 and long.endswith("…")
+
+
+async def test_lines_makes_one_request_each_and_drops_repeats():
+    k = FakeKobold(['"One."]', '"One."]', '"Two."]'])
+    assert await k.lines("clark", "Write one opener.", "week", "3 streams", n=3) == ["One.", "Two."]
+    assert len(k.prompts) == 3
+    assert await FakeKobold([]).lines("clark", "x", "week", "y", n=2) is None     # unreachable
 
 
 class Poster:
@@ -206,7 +222,7 @@ async def test_generate_sends_stops_and_keeps_the_raw_answer():
     k = kobold.Kobold(h, "http://k:5001", per_slot=5)
     got = await k.generate("prompt")
     assert got == "Sorry, here you go: none" and k.last_raw == got
-    assert h.json["stop_sequence"] == kobold.STOPS and h.json["max_length"] == 70 * 5 + 60
+    assert h.json["stop_sequence"] == kobold.STOPS and h.json["max_length"] == 200
 
 
 def test_facts_name_every_game_for_kobold(tmp_path):

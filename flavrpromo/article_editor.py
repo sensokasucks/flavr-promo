@@ -11,6 +11,7 @@ and the owner's own text sections. For each section the owner can:
   * Regen: a calendar section is built again from the latest calendar (new streams, VODs, titles);
     a host section gets its template lines shuffled and, with KoboldCpp set up, new ✨ lines asked
     for in the background (flavrpromo/host_picker.py ``start_ai``, only that section's slots);
+  * ✨ beside one line: KoboldCpp rewrites just that line (``redo_line``, one request), in place;
   * host sections: pick one of the lines (or type their own) and the picture: the opener card (with
     the regular / chibi switch: which one is big and which one peeks), the desk card (regular or
     chibi), any one of the host's pictures on its own, or none. Card pictures are drawn with
@@ -188,33 +189,59 @@ def reroll(p: Dict[str, Any], slot: str) -> str:
     return "Another line." if order[0] != cur else "That's the only template line for it."
 
 
+def _ask_of(p: Dict[str, Any], slot: str) -> Tuple[str, str]:
+    """(ask, facts sentence) KoboldCpp gets for one slot: a day picture uses that day's facts, a note
+    names its highlight, the rest the review's facts."""
+    a = kobold.asks()
+    if slot.startswith("day"):
+        return a["day"], (p.get("day_text") or {}).get(slot[3:], "")
+    facts = kobold.facts_text(p.get("facts") or {})
+    if slot.startswith("note"):
+        n = (p.get("notes") or [{}] * 4)[int(slot[4:])]
+        return a["note"].replace("{note}", f"{n.get('label', '').lower()}: {n.get('value', '')}"), facts
+    return a.get(slot, a["opener"]), facts
+
+
 async def ask_slot(poster: Any, p: Dict[str, Any], slot: str) -> str:
-    """✨ for one slot: one KoboldCpp request for new lines for just that slot (the page waits; one
-    request takes seconds to a minute). New lines go first, marked ✨, and the first is picked."""
+    """✨ for one slot: per_slot fresh lines from KoboldCpp, one request each (a request = one whole
+    line, a few sentences are fine; owner 2026-11-21). The page waits. They replace the slot's
+    earlier ✨ lines (the template lines stay below), and the first is picked."""
     kob = getattr(poster, "kobold", None)
     if kob is None:
         return "KoboldCpp isn't set up (Settings → KoboldCpp)."
-    a = kobold.asks()
-    if slot.startswith("day"):
-        ask, facts = a["day"], (p.get("day_text") or {}).get(slot[3:], "")
-    elif slot.startswith("note"):
-        n = (p.get("notes") or [{}] * 4)[int(slot[4:])]
-        ask = a["note"].replace("{note}", f"{n.get('label', '').lower()}: {n.get('value', '')}")
-        facts = kobold.facts_text(p.get("facts") or {})
-    else:
-        ask, facts = a.get(slot, a["opener"]), kobold.facts_text(p.get("facts") or {})
-    heading = host_picker.heading_of(p, "review")
-    got = await kob.generate(kobold.prompt(p["host"], kobold.fill_ask(ask, kob.per_slot, heading), facts))
-    if got is None:
+    ask, facts = _ask_of(p, slot)
+    new = await kob.lines(p["host"], ask, host_picker.heading_of(p, "review"), facts)
+    if new is None:
         return "KoboldCpp couldn't be reached."
-    have = (p.get("candidates") or {}).get(slot) or []
-    new = [x for x in kobold.parse(got) if x not in have][:kob.per_slot]
     if not new:
-        return f"KoboldCpp answered, but with no usable lines. Try ✨ again. Its answer: {got[:200]}"
-    p["candidates"][slot] = new + have
-    p["ai"] = list(p.get("ai") or []) + new
+        return f"KoboldCpp answered, but with no usable line. Try ✨ again. Its answer: {kob.last_raw[:200]}"
+    ai = set(p.get("ai") or [])
+    kept = [x for x in (p.get("candidates") or {}).get(slot) or [] if x not in ai and x not in new]
+    p["candidates"][slot] = new + kept
+    p["ai"] = [x for x in p.get("ai") or [] if x in sum((p["candidates"].values()), [])] + new
     p.setdefault("picks", {})[slot] = new[0]
     return f"✨ {len(new)} new line{'' if len(new) == 1 else 's'} from KoboldCpp (the first one is picked)."
+
+
+async def redo_line(poster: Any, p: Dict[str, Any], slot: str, i: int) -> str:
+    """The ✨ next to one line: KoboldCpp rewrites just that one (one request); it stays in its place,
+    and stays picked if it was."""
+    kob = getattr(poster, "kobold", None)
+    cands = (p.get("candidates") or {}).get(slot) or []
+    if kob is None or not 0 <= i < len(cands):
+        return "KoboldCpp isn't set up (Settings → KoboldCpp)." if kob is None else "That line is gone."
+    ask, facts = _ask_of(p, slot)
+    new = await kob.line(p["host"], ask, host_picker.heading_of(p, "review"), facts)
+    if new is None:
+        return "KoboldCpp couldn't be reached."
+    if not new or new in cands:
+        return f"KoboldCpp answered, but with no new usable line. Try again. Its answer: {kob.last_raw[:200]}"
+    old = cands[i]
+    cands[i] = new
+    p["ai"] = [x for x in p.get("ai") or [] if x != old] + [new]
+    if host_picker.chosen(p, slot) == old:
+        p.setdefault("picks", {})[slot] = new
+    return "✨ Rewrote that line."
 
 
 def _refresh(p: Dict[str, Any], a: Dict[str, Any], only: str = "") -> str:
@@ -307,11 +334,14 @@ def _line_choices(p: Dict[str, Any], slot: str, title: str, ai_on: bool = False,
     cands = (p.get("candidates") or {}).get(slot) or []
     cur = host_picker.chosen(p, slot)
     ai = set(p.get("ai") or [])
+    # a ✨ on every line rewrites just that one (redo_line; owner 2026-11-21: "regenerate them individually")
+    redo = (lambda i: f' <button name=action value="redo:{slot}:{i}" class="alt mini ask" title="Rewrite this line '
+            f'with KoboldCpp">✨</button>') if ai_on else (lambda i: "")
     opts = "".join(f'<label><input type=radio name="{slot}" value="{_e(c)}"{" checked" if c == cur else ""}> '
-                   f'{"✨ " if c in ai else ""}{_e(c)}</label>' for c in cands)
+                   f'{"✨ " if c in ai else ""}{_e(c)}{redo(i)}</label>' for i, c in enumerate(cands))
     custom = cur if cur and cur not in cands else ""
     opts += (f'<label><input type=radio name="{slot}" value="__custom"{" checked" if custom else ""}> your own: '
-             f'<input name="{slot}__text" value="{_e(custom)}" maxlength=300></label>')
+             f'<input name="{slot}__text" value="{_e(custom)}" maxlength={kobold.MAX_CHARS}></label>')
     if none:
         off = slot in (p.get("picks") or {}) and not p["picks"][slot]
         opts += f'<label><input type=radio name="{slot}" value="__none"{" checked" if off else ""}> {_e(none)}</label>'
@@ -458,7 +488,7 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
             picks[slot] = ""                    # a day picture without a bubble
             continue
         if v == "__custom":
-            v = " ".join(str(form.get(f"{slot}__text") or "").split())[:300]
+            v = " ".join(str(form.get(f"{slot}__text") or "").split())[:kobold.MAX_CHARS]
         if v:
             picks[slot] = v
         else:
@@ -558,6 +588,10 @@ def add_routes(app: web.Application, poster: Any) -> None:
             note, anchor = reroll(p, sid), slot_section(sid)
         elif verb == "ask" and sid in (p.get("candidates") or {}):
             note, anchor = await ask_slot(poster, p, sid), slot_section(sid)
+        elif verb == "redo":                    # "redo:<slot>:<index>": one line rewritten
+            slot, _, idx = sid.rpartition(":")
+            if slot in (p.get("candidates") or {}) and idx.isdigit():
+                note, anchor = await redo_line(poster, p, slot, int(idx)), slot_section(slot)
         elif verb == "regen" and sid in HOST_SECTIONS:
             _host_lines(p, shuffle=True, only=SLOTS[sid])
             note = "New lines."

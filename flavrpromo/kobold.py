@@ -10,9 +10,11 @@ KoboldCpp was started with --password). KoboldCpp's own documented API:
 
 The prompt is the host's character card (Character Card V2, flavrpromo/host_art/<host>/card.json:
 the same cards work in SillyTavern): system prompt, description, personality, scenario and the
-example exchanges, then one request per slot ("Facts: ... Write 3 opener lines."). The card asks
-for a JSON list of strings; anything else in the answer is ignored. Lines are checked (no @, no
-links, no blanks left, at most MAX_CHARS) before they reach the page.
+example exchanges, then one request per LINE ("Facts: ... Write one opener ..."), made per_slot
+times for a slot's alternatives (Sen 2026-11-21: asking for 5 at once got one paragraph split into
+5 "lines"). The card asks for a JSON list of strings; whatever comes back is joined into ONE line
+(``as_line``), so a paragraph-long answer stays whole. Lines are checked (no @, no links, no
+blanks left, at most MAX_CHARS) before they reach the page.
 
 The owner can edit both on the settings page (flavrpromo/card_page.py, /settings/cards): a card's
 text fields are saved in kv "host_cards" ({host: {field: text}}) and the slot asks in kv
@@ -37,7 +39,7 @@ import aiohttp
 log = logging.getLogger("flavrpromo.kobold")
 
 CARDS = Path(__file__).resolve().parent / "host_art"
-MAX_CHARS = 300             # longest line kept (the picker's own-line box allows the same)
+MAX_CHARS = 500             # longest line kept: a few sentences (the own-line boxes allow the same)
 PER_SLOT = 3                # lines asked for in each slot
 TIMEOUT = 300               # seconds for one generate call (a big model or a CPU-only PC can be slow)
 # where an answer stops: a new example / the producer speaking, or a chat model's end-of-turn marks.
@@ -46,14 +48,18 @@ TIMEOUT = 300               # seconds for one generate call (a big model or a CP
 STOPS = ["<START>", "Producer:", "\n\n\n", "<end_of_turn>", "<|im_end|>", "<|eot_id|>", "</s>"]
 
 # what each picker slot asks the model for (flavrpromo/hosts.py review_candidates)
+# One request = ONE line (owner 2026-11-21: a model asked for "5 lines" wrote one paragraph and split
+# it into 5 items, "Then we have Cara on deck." / "And finally, Lulu ..."; so each request asks for a
+# single complete line, a few sentences are fine, and per_slot requests make the alternatives). {n}
+# still works in an edited ask (it is 1).
 ASKS = {
-    "opener": "Write {n} opener lines for the {heading}.",
-    "note": "Write {n} very short comments (2 to 5 words) on this highlight: {note}.",
-    "desk_highlight": "Write {n} closing lines about the highlight of the {heading}.",
-    "desk_nudge": "Write {n} short 'for next time' nudges for the group.",
-    "desk_signoff": "Write {n} short sign-off lines (you are leaving your desk).",
+    "opener": "Write one opener for the {heading}: a complete line of one to three sentences.",
+    "note": "Write one very short comment (2 to 5 words) on this highlight: {note}.",
+    "desk_highlight": "Write one closing line about the highlight of the {heading} (one to three sentences).",
+    "desk_nudge": "Write one short 'for next time' nudge for the group.",
+    "desk_signoff": "Write one short sign-off line (you are leaving your desk).",
     # the article editor's day pictures (flavrpromo/article_editor.py ``ask_slot``; the facts are that day's)
-    "day": "Write {n} short lines for this day's picture: who streams and when.",
+    "day": "Write one line for this day's picture about who streams and when (one to three sentences).",
 }
 
 
@@ -167,7 +173,20 @@ def fill_ask(ask: str, n: int, heading: str) -> str:
         return ask.replace("{n}", str(n)).replace("{heading}", heading.lower())
 
 
-def parse(text: str) -> List[str]:
+def as_line(text: str) -> str:
+    """One answer as ONE line: the items of its list joined ("Monday is busy!" + "Traube starts at
+    midnight." = one line), cut to MAX_CHARS at a word; "" when nothing usable."""
+    items = parse(text, MAX_CHARS * 4)
+    line = " ".join(items)
+    if not line:                        # plain prose with no quotes: keep the words themselves
+        plain = re.sub(r"(?s)<think>.*?</think>|```(?:json)?", "", text or "")
+        line = " ".join(plain.strip().strip("[]").strip().strip('"').split())
+    if len(line) > MAX_CHARS:
+        line = line[:MAX_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return line
+
+
+def parse(text: str, longest: int = MAX_CHARS) -> List[str]:
     """The model's answer (continuing after "[") as clean lines; bad ones are dropped. Copes with a
     list written one item per line, a ```json fence or a second "[", thinking (<think>...</think>)
     before it, and a numbered / bulleted list of quoted lines instead of JSON."""
@@ -182,7 +201,7 @@ def parse(text: str) -> List[str]:
     out: List[str] = []
     for x in items if isinstance(items, list) else []:
         s = " ".join(str(x).split())
-        if not s or len(s) > MAX_CHARS or "@" in s or "http" in s.lower() or "{" in s or s in out:
+        if not s or len(s) > longest or "@" in s or "http" in s.lower() or "{" in s or s in out:
             continue
         out.append(s)
     return out
@@ -216,8 +235,8 @@ class Kobold:
 
     async def generate(self, text: str, max_length: int = 0) -> Optional[str]:
         """KoboldCpp's answer to ``text`` (None = unreachable / an error). ``max_length`` in tokens
-        (0 = enough for per_slot lines: 70 each and some spare)."""
-        max_length = max_length or 70 * self.per_slot + 60
+        (0 = enough for one line of a few sentences: 200)."""
+        max_length = max_length or 200
         try:
             async with self.http.post(f"{self.url}/api/v1/generate", headers=self._headers(),
                                       timeout=aiohttp.ClientTimeout(total=TIMEOUT),
@@ -241,7 +260,6 @@ class Kobold:
         """New lines for every slot of a review: {slot: [lines]} (empty slots left out; {} when offline).
         ``only``: slot name starts to ask for (("opener", "note") = the opener card's slots; the
         article editor's host sections), () = all."""
-        text = facts_text(facts)
         a = asks()
         todo = [("opener", a["opener"])]
         todo += [(f"note{i}", a["note"].replace("{note}", f"{n['label'].lower()}: {n['value']}"))
@@ -251,10 +269,27 @@ class Kobold:
             todo = [(s, x) for s, x in todo if any(s.startswith(o) for o in only)]
         out: Dict[str, List[str]] = {}
         for slot, ask in todo:
-            got = await self.generate(prompt(key, fill_ask(ask, self.per_slot, heading), text))
+            got = await self.lines(key, ask, heading, facts)
             if got is None:
                 break                       # offline or failing: stop asking for this review
-            lines = parse(got)
-            if lines:
-                out[slot] = lines[:self.per_slot]
+            if got:
+                out[slot] = got
+        return out
+
+    async def line(self, key: str, ask: str, heading: str, facts: Any) -> Optional[str]:
+        """ONE new line for a slot (one request; "" = it answered with nothing usable, None =
+        unreachable). ``facts``: a facts dict (hosts.facts) or the facts sentence itself."""
+        text = facts if isinstance(facts, str) else facts_text(facts)
+        got = await self.generate(prompt(key, fill_ask(ask, 1, heading), text))
+        return None if got is None else as_line(got)
+
+    async def lines(self, key: str, ask: str, heading: str, facts: Any, n: int = 0) -> Optional[List[str]]:
+        """``n`` (default per_slot) different lines for a slot, one request each; None = unreachable."""
+        out: List[str] = []
+        for _ in range(n or self.per_slot):
+            got = await self.line(key, ask, heading, facts)
+            if got is None:
+                return out or None
+            if got and got not in out:
+                out.append(got)
         return out
