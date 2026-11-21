@@ -19,6 +19,10 @@ own bottom, so its content gets a little less room).
   stream   one stream: thumbnail, name, game, time, and a line                              ref ("d<day>:<n>"), line
   stats    the review's highlight numbers side by side (hosts.notes of the draft's facts)
   grid     one day's thumbnails (up to 6) under the day's name                              day (0-6)
+  hero     a big opening: a small word on top ("Meet"), the host's name huge, their job, a tagline, and
+           the host picture large on an angled colour panel                                  top, title, sub, tag, host, kind, var
+  chat     speech-bubble rows, two hosts talking (alternating, each with their head as the avatar)
+                                                                                              lines (one per row), host, other
   quote    one big line of text                                                              text
   footer   a closing strip: the host's small picture and a sign-off line                    host, kind, var, line
 ``host`` empty = the draft's host; ``kind`` is a hosts.POOLED picture kind (happy, chibi_happy ...,
@@ -49,10 +53,14 @@ TYPES: Dict[str, Any] = {
     "stats": ("Highlight numbers", (150, 200, 260)),
     "grid": ("A day's pictures", (400, 540, 700)),
     "quote": ("Big line", (170, 220, 300)),
+    "hero": ("Hero opening", (420, 520, 640)),
+    "chat": ("Chat bubbles", (300, 420, 560)),
     "footer": ("Sign-off strip", (260, 340, 440)),
 }
 SIDES = {"left": "Host on the left", "right": "Host on the right"}
-CUTS = {"": "Straight edge", "down": "Slants down to the right ↘", "up": "Slants down to the left ↙"}
+CUTS = {"": "Straight edge", "down": "Slants down to the right ↘", "up": "Slants down to the left ↙",
+        "v": "V shape ⌄ (dips in the middle)", "peak": "Peak ⌃ (rises in the middle)"}
+V_AT = 53                            # % of the width where a V / peak turns
 SLOPES = (60, 110, 170)              # px the slanted edge drops over the 1600 px width: gentle / normal / steep
 BANDS = {                            # background colours of chunks next to a cut (taken in turn)
     "colette": ("#2a0f2a", "#521b4c", "#1b1018", "#3d1233"),
@@ -87,7 +95,9 @@ def new_chunk(ctype: str, existing: List[Dict[str, Any]], **fields: Any) -> Dict
     defaults = {"header": {"title": "", "sub": ""},
                 "host": {"host": "", "kind": "happy", "var": "", "side": "left", "line": ""},
                 "stream": {"ref": "", "line": ""}, "stats": {}, "grid": {"day": 0}, "quote": {"text": ""},
-                "footer": {"host": "", "kind": "chibi_happy", "var": "", "line": ""}}
+                "footer": {"host": "", "kind": "chibi_happy", "var": "", "line": ""},
+                "hero": {"top": "Meet", "title": "", "sub": "", "tag": "", "host": "", "kind": "happy", "var": ""},
+                "chat": {"lines": "", "host": "", "other": ""}}
     base.update(defaults.get(base["type"], {}))
     base.update(fields)
     return base
@@ -113,6 +123,13 @@ BUILTIN: Dict[str, List[Dict[str, Any]]] = {
         {"id": "c1", "type": "header", "size": 1, "cut": "down", "title": "", "sub": ""},
         {"id": "c2", "type": "host", "size": 1, "cut": "up", "host": "", "kind": "happy", "var": "", "side": "left", "line": ""},
         {"id": "c3", "type": "stats", "size": 1, "cut": "down"},
+        {"id": "c4", "type": "footer", "size": 0, "host": "", "kind": "chibi_happy", "var": "", "line": ""},
+    ],
+    "Hero and chat (diagonal)": [
+        {"id": "c1", "type": "hero", "size": 1, "cut": "v", "top": "Meet", "title": "", "sub": "", "tag": "Your week, pinned up.",
+         "host": "", "kind": "happy", "var": ""},
+        {"id": "c2", "type": "chat", "size": 1, "cut": "up", "lines": "", "host": "", "other": ""},
+        {"id": "c3", "type": "stats", "size": 1, "cut": "peak"},
         {"id": "c4", "type": "footer", "size": 0, "host": "", "kind": "chibi_happy", "var": "", "line": ""},
     ],
     "Day in detail": [
@@ -167,7 +184,7 @@ def tile_choices(week: Any) -> List[Dict[str, str]]:
 def cut_depth(chunks: List[Dict[str, Any]], i: int) -> int:
     """How many px the bottom edge of chunk ``i`` drops (0 = straight or the last chunk; at most 40% of its height)."""
     c = chunks[i]
-    if i == len(chunks) - 1 or c.get("cut") not in ("down", "up"):
+    if i == len(chunks) - 1 or c.get("cut") not in ("down", "up", "v", "peak"):
         return 0
     try:
         d = SLOPES[max(0, min(2, int(c.get("slope", 1))))]
@@ -255,6 +272,44 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
         return (f'<div style="{box}padding-top:18px"><div style="font-size:34px;font-weight:900;color:{th["gold"]};margin-bottom:14px">'
                 f'{_e(head)} · {n} stream{"" if n == 1 else "s"}</div><div style="display:flex;flex-wrap:wrap;gap:20px 24px">'
                 f'{body}</div></div>')
+    if kind == "hero":
+        key = _host_of(c, ctx)
+        pic = _pic(ctx, key, c.get("kind") or "happy", c.get("var") or "")
+        acc = THEMES.get(key, th)["accent"]
+        title = c.get("title") or hosts.HOSTS[key]["name"].split()[0]
+        sub = c.get("sub") or hosts.HOSTS[key]["role"]
+        tag = c.get("tag") or ctx.get("range") or ""
+        big = min(210, int(h * 0.42), int(WIDTH * 0.47 / (0.8 * max(4, len(title)))))      # a long name must stay off the panel
+        panel = (f'<div style="position:absolute;right:0;top:0;width:{int(WIDTH * 0.52)}px;height:100%;background:{acc};'
+                 f'clip-path:polygon(24% 0,100% 0,100% 100%,0 100%)"></div>')
+        figure = (f'<img src="{pic}" style="position:absolute;right:50px;bottom:0;height:{int(h * 0.98)}px;max-width:{int(WIDTH * 0.46)}px;'
+                  f'object-fit:contain;object-position:bottom">' if pic else "")
+        return (f'<div style="position:relative;height:{h}px;overflow:hidden">{panel}{figure}'
+                f'<div style="position:absolute;left:70px;top:0;height:100%;width:{int(WIDTH * 0.52)}px;display:flex;flex-direction:column;'
+                f'justify-content:center"><div style="font-size:{int(big * 0.42)}px;font-weight:800">{_e(c.get("top"))}</div>'
+                f'<div style="font-size:{big}px;line-height:1;font-weight:900;color:{acc};letter-spacing:-2px;text-transform:uppercase;'
+                f'text-shadow:0 4px 0 #0005">{_e(title)}</div><div style="font-size:{int(big * 0.3)}px;font-weight:800;margin-top:6px">'
+                f'{_e(sub)}</div><div style="font-size:{int(big * 0.2)}px;color:{th["gold"]};font-weight:700;margin-top:12px">'
+                f'{_e(tag)}</div></div></div>')
+    if kind == "chat":
+        a = _host_of(c, ctx)
+        b = c.get("other") if c.get("other") in hosts.HOSTS and c.get("other") != a else next((k for k in hosts.HOSTS if k != a), a)
+        rows = [x.strip() for x in str(c.get("lines") or "").splitlines() if x.strip()][:5] or ["Type the chat lines in the builder."]
+        row_h = max(70, (h - 40) // len(rows))
+        out = ""
+        for n, text in enumerate(rows):
+            who = a if n % 2 == 0 else b
+            avatar = _pic(ctx, who, "head", "") or _pic(ctx, who, "chibi_head", "")
+            acc = THEMES.get(who, th)["accent"]
+            mine = n % 2 == 0
+            av = (f'<div style="width:{min(96, row_h - 10)}px;height:{min(96, row_h - 10)}px;border-radius:50%;flex:none;'
+                  f'background:{acc}{f' center/cover url({avatar})' if avatar else ''};border:4px solid #fff;box-shadow:0 4px 10px #0007"></div>')
+            bub = (f'<div style="max-width:{int(WIDTH * 0.66)}px;background:{acc if mine else th["paper"]};'
+                   f'color:{"#fff" if mine else th["ink"]};border-radius:30px;padding:{max(10, row_h // 6)}px 30px;'
+                   f'font-size:{min(34, max(22, row_h // 3))}px;font-weight:700;line-height:1.25;box-shadow:0 5px 14px #0006">{_e(text)}</div>')
+            out += (f'<div style="height:{row_h}px;display:flex;align-items:center;gap:20px;'
+                    f'{"" if mine else "flex-direction:row-reverse;"}">{av}{bub}</div>')
+        return f'<div style="position:relative;height:{h}px;overflow:hidden;padding:20px 70px">{out}</div>'
     # quote
     return (f'<div style="{box}display:flex;align-items:center;justify-content:center;text-align:center;font-size:'
             f'{50 if h > 200 else 42}px;font-weight:900;line-height:1.25;color:{th["gold"]}">'
@@ -278,18 +333,26 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
         bg = f"background:{bands[i % len(bands)]};" if (d or above) else ""
         clip = ""
         if d:
-            clip = (f"clip-path:polygon(0 0,100% 0,100% 100%,0 calc(100% - {d}px));" if c.get("cut") == "down" else
-                    f"clip-path:polygon(0 0,100% 0,100% calc(100% - {d}px),0 100%);")
-            seams.append((y + h, d, c.get("cut")))
+            kind = c.get("cut")
+            poly = {"down": f"0 0,100% 0,100% 100%,0 calc(100% - {d}px)",
+                    "up": f"0 0,100% 0,100% calc(100% - {d}px),0 100%",
+                    "v": f"0 0,100% 0,100% calc(100% - {d}px),{V_AT}% 100%,0 calc(100% - {d}px)",
+                    "peak": f"0 0,100% 0,100% 100%,{V_AT}% calc(100% - {d}px),0 100%"}[kind]
+            clip = f"clip-path:polygon({poly});"
+            seams.append((y + h, d, kind))
         rows.append(f'<div style="position:absolute;left:0;top:{y - above}px;width:{WIDTH}px;height:{h + above}px;'
                     f'z-index:{n - i};{bg}{clip}"><div style="position:absolute;left:0;top:{above}px;width:{WIDTH}px;'
                     f'height:{h - d}px">{_draw(c, ctx, h - d)}</div></div>')
         y += h
     stripes = ""
     for bottom, d, kind in seams:
-        y1, y2 = (bottom - d, bottom) if kind == "down" else (bottom, bottom - d)
-        stripes += (f'<line x1="0" y1="{y1}" x2="{WIDTH}" y2="{y2}" stroke="#fff" stroke-width="18"/>'
-                    f'<line x1="0" y1="{y1}" x2="{WIDTH}" y2="{y2}" stroke="{th["accent"]}" stroke-width="7"/>')
+        mid = int(WIDTH * V_AT / 100)
+        pts = {"down": [(0, bottom - d), (WIDTH, bottom)], "up": [(0, bottom), (WIDTH, bottom - d)],
+               "v": [(0, bottom - d), (mid, bottom), (WIDTH, bottom - d)],
+               "peak": [(0, bottom), (mid, bottom - d), (WIDTH, bottom)]}[kind]
+        line = " ".join(f"{x},{yy}" for x, yy in pts)
+        stripes += (f'<polyline points="{line}" fill="none" stroke="#fff" stroke-width="18"/>'
+                    f'<polyline points="{line}" fill="none" stroke="{th["accent"]}" stroke-width="7"/>')
     svg = (f'<svg style="position:absolute;left:0;top:0;z-index:99" width="{WIDTH}" height="{max(1, y)}" '
            f'viewBox="0 0 {WIDTH} {max(1, y)}">{stripes}</svg>') if stripes else ""
     return (f'<!doctype html><html><head><meta charset=utf-8><style>*{{box-sizing:border-box;margin:0}}'

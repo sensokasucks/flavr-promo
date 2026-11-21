@@ -82,6 +82,19 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str]) -
         side = (f'<label>Side <select name="{cid}__side">{_opts(tall.SIDES.items(), c.get("side") or "left")}</select></label>'
                 if t == "host" else "")
         return _picture_menus(c, p) + side + _line_field(c, "line", lines, "Line from the article")
+    if t == "hero":
+        return (f'<label>Small word on top <input name="{cid}__top" value="{_e(c.get("top"))}"></label>'
+                f'<label>Big title <input name="{cid}__title" value="{_e(c.get("title"))}" placeholder="(the host\'s first name)"></label>'
+                f'<label>Under it <input name="{cid}__sub" value="{_e(c.get("sub"))}" placeholder="(the host\'s job)"></label>'
+                f'<label>Tagline <input name="{cid}__tag" value="{_e(c.get("tag"))}" placeholder="(the date range)"></label>'
+                + _picture_menus(c, p))
+    if t == "chat":
+        hopts = [("", "The article's host")] + [(k, h["name"]) for k, h in hosts.HOSTS.items()]
+        oopts = [("", "The other host")] + [(k, h["name"]) for k, h in hosts.HOSTS.items()]
+        return (f'<label>First speaker <select name="{cid}__host">{_opts(hopts, c.get("host") or "")}</select></label> '
+                f'<label>Answers <select name="{cid}__other">{_opts(oopts, c.get("other") or "")}</select></label>'
+                f'<label>Lines, one per row (they take turns)</label>'
+                f'<textarea name="{cid}__lines" rows=5 maxlength=600>{_e(c.get("lines"))}</textarea>')
     if t == "stream":
         refs = [("", "(pick a stream)")] + [(x["ref"], x["label"]) for x in tall.tile_choices(week)]
         return (f'<label>Stream <select name="{cid}__ref">{_opts(refs, c.get("ref") or "")}</select></label>'
@@ -168,9 +181,20 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
         c["cut"] = get("cut")
     if get("slope") in ("0", "1", "2"):
         c["slope"] = int(get("slope"))
+    if t == "hero":
+        for f in ("top", "title", "sub", "tag"):
+            if get(f) is not None:
+                c[f] = " ".join(str(get(f)).split())[:80]
+    if t == "chat":
+        if get("host") is not None:
+            c["host"] = get("host") if get("host") in hosts.HOSTS else ""
+        if get("other") is not None:
+            c["other"] = get("other") if get("other") in hosts.HOSTS else ""
+        if get("lines") is not None:
+            c["lines"] = "\n".join(" ".join(x.split())[:kobold.MAX_CHARS] for x in str(get("lines")).splitlines() if x.strip())[:600]
     if t == "header":
         c["title"], c["sub"] = " ".join(str(get("title") or "").split())[:120], " ".join(str(get("sub") or "").split())[:120]
-    if t in ("host", "footer"):
+    if t in ("host", "footer", "hero"):
         if get("host") is not None:
             c["host"] = get("host") if get("host") in hosts.HOSTS else ""
         if get("kind") in hosts.POOLED:

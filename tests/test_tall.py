@@ -71,6 +71,21 @@ async def test_build_a_tall_picture_with_menus(tmp_path):
             assert [x["id"] for x in chunks][:2] == ["c2", "c1"]
             chunks = await build("dup:c4")
             assert len(chunks) == 5 and chunks[4]["id"] == "c5"
+            # hero and chat chunks: their own boxes, the V / peak edges
+            chunks = await build("add", newtype="hero")
+            hid = chunks[-1]["id"]
+            chunks = await build("add", newtype="chat")
+            cid = chunks[-1]["id"]
+            chunks = await build("save", **{f"{hid}__title": "Colette", f"{hid}__top": "Meet", f"{hid}__tag": "Coffee first",
+                                            f"{hid}__cut": "v", f"{cid}__lines": "Hi!\n\n  Hello   there \nBye", f"{cid}__other": "clark",
+                                            f"{cid}__cut": "nonsense"})
+            hero, chat = chunks[-2], chunks[-1]
+            assert hero["title"] == "Colette" and hero["tag"] == "Coffee first" and hero["cut"] == "v"
+            assert chat["lines"] == "Hi!\nHello there\nBye" and chat["other"] == "clark" and not chat.get("cut")
+            page = await (await c.get(f"/settings/tall?d={dkey}&t=tall1")).text()
+            assert "V shape" in page and "Lines, one per row" in page and "Tagline" in page
+            await build(f"del:{cid}")
+            await build(f"del:{hid}")
             # saved chunk + saved stack, used again
             await build("savechunk:c2", **{"c2__savename": "Pointing chibi"})
             assert poster.store.get("tall_chunks")["Pointing chibi"]["kind"] == "chibi_pointing"
@@ -142,11 +157,46 @@ def test_diagonal_cuts_clip_the_edge_and_keep_the_height(tmp_path):
         doc = tall.document(chunks, ctx)
         assert "polygon(0 0,100% 0,100% 100%,0 calc(100% - 88px))" in doc         # down: left edge higher
         assert "polygon(0 0,100% 0,100% calc(100% - 60px),0 100%)" in doc          # up: right edge higher
-        assert doc.count("<line") == 4 and "<svg" in doc                           # a stripe (2 lines) per cut
+        assert doc.count("<polyline") == 4 and "<svg" in doc                           # a stripe (2 lines) per cut
         assert f"height:{tall.total(chunks)}px" in doc and "#563520" in doc        # Clark's band colours
         straight = tall.document([dict(c, cut="") for c in chunks], ctx)
         assert "clip-path" not in straight and "<svg" not in straight
         assert tall.cut_depth([dict(chunks[0], cut="")] + chunks, 0) == 0
         assert "Slants down" in tall.CUTS["down"] and tall.total(tall.BUILTIN["Week overview (diagonal)"]) <= tall.MAX_H
+    finally:
+        hosts.init(None)
+
+
+def test_v_cuts_hero_and_chat_chunks(tmp_path):
+    # the "Luna" style pieces: V / peak seams, a hero opening on an angled panel, two hosts chatting
+    import base64
+    from types import SimpleNamespace
+    hosts.init(tmp_path, defaults=False)
+    for key, data in (("colette", b"\x89col-head"), ("clark", b"\x89clark-head"), ("colette", None)):
+        (tmp_path / key).mkdir(parents=True, exist_ok=True)
+        if data:
+            (tmp_path / key / "head.png").write_bytes(data)
+    (tmp_path / "colette" / "happy.png").write_bytes(b"\x89col-happy")
+    week = SimpleNamespace(days=[[]], day_name=lambda i: "SUN", tz=None)
+    ctx = {"host": "colette", "week": week, "img": lambda u: "", "notes": [], "facts": {}, "heading": "H",
+           "range": "Nov 15-21", "seed": 1, "pins": {}}
+    chunks = [{"id": "c1", "type": "hero", "size": 1, "cut": "v", "top": "Meet", "title": "", "sub": "", "tag": "",
+               "host": "", "kind": "happy", "var": ""},
+              {"id": "c2", "type": "chat", "size": 1, "cut": "peak", "lines": "Hi there!\nHello!\nBig week.", "host": "", "other": ""},
+              {"id": "c3", "type": "quote", "size": 0, "text": "End"}]
+    try:
+        doc = tall.document(chunks, ctx)
+        assert "MEET" not in doc and ">Meet<" in doc and ">COLETTE<" not in doc and "Colette" in doc     # first name, upper-cased by CSS
+        assert "Marketing" in doc and "Nov 15-21" in doc                                  # job and the date range as defaults
+        assert base64.b64encode(b"\x89col-happy").decode() in doc                          # the big hero picture
+        assert "clip-path:polygon(24% 0" in doc                                            # the angled colour panel
+        assert doc.count("<polyline") == 4                                                 # a stripe (2 lines) per cut
+        assert f"100% calc(100% - {tall.cut_depth(chunks, 0)}px),{tall.V_AT}% 100%" in doc    # V seam
+        assert f"{tall.V_AT}% calc(100% - {tall.cut_depth(chunks, 1)}px)" in doc               # peak seam
+        # the chat: three rows taking turns between the two hosts, each with that host's head as the avatar
+        assert doc.count("Hi there!") == doc.count("Hello!") == doc.count("Big week.") == 1
+        assert base64.b64encode(b"\x89col-head").decode() in doc and base64.b64encode(b"\x89clark-head").decode() in doc
+        assert "flex-direction:row-reverse" in doc
+        assert tall.total(tall.BUILTIN["Hero and chat (diagonal)"]) <= tall.MAX_H
     finally:
         hosts.init(None)
