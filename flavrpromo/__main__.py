@@ -32,6 +32,7 @@ from .promo import Promo
 from .platforms.kick import Kick
 from .platforms.twitch import Twitch
 from .platforms.youtube import DEEP_CHECK, YouTube
+from . import host_webhooks
 from .render import ImageCache, Screenshotter
 from .server import Server
 from .store import Store
@@ -87,6 +88,9 @@ async def main() -> int:
                                 hold=lambda text: pinger.ping("calendar", text), backfill=watcher.backfill,
                                 share_on=lambda: pinger.switches().get("share", False))
         bot.calendar = poster
+        # go-live cards posted as the host (flavrpromo/host_webhooks.py): one channel webhook per host,
+        # WebP faces drawn to PNG avatars with the same Chromium; kv hosts_webhook (settings page, Hosts)
+        bot.host_hooks = host_webhooks.HostWebhooks(bot, store, shooter)
         # community calendar (flavrpromo/promo.py): streams members add from their posts, followed with the
         # same platform clients; settings PROMO_WEEKLY_LIMIT, PROMO_WAIT_HOURS
         bot.promo = Promo(store, checkers, ZoneInfo(s.timezone), weekly_limit=s.promo_weekly_limit,

@@ -11,7 +11,8 @@ Sections (each its own form; a save redirects back with a note):
               a Test button that asks KoboldCpp for its model. Saved in kv "kobold"; it wins over
               KOBOLD_URL / KOBOLD_KEY from the environment (an empty address there = off).
   Hosts       on / off and "take turns" or always one host: the same kv as /host setup
-              (hosts_on, hosts_only).
+              (hosts_on, hosts_only); "post go-live cards as the host" (kv hosts_webhook, default on,
+              flavrpromo/host_webhooks.py; needs the bot's Manage Webhooks in the live channels).
   Pictures    every picture kind for both hosts with a preview, upload to replace one (the same
               as /host picture) and "back to built-in" (deletes the upload).
   Lines       every template slot for both hosts as a text box, one line per row; a blank that
@@ -70,6 +71,7 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
     k = kobold_settings(poster)
     only = str(store.get("hosts_only") or "")
     on = bool(store.get("hosts_on"))
+    as_host = store.get("hosts_webhook") is not False      # flavrpromo/host_webhooks.py SETTING, default on
     # KoboldCpp
     kob = (f'<section id=kobold><h2>✨ KoboldCpp (AI lines)</h2>'
            f'<p class=help>Lines in each host\'s voice on the review picker page. Empty address = template lines only.</p>'
@@ -89,6 +91,9 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
            f'reviews wait for your picks)</label>'
            + "".join(f'<label><input type=radio name=only value="{v}"{" checked" if only == v else ""}> {_e(n)}</label>'
                      for v, n in opts)
+           + f'<label><input type=checkbox name=webhook value=1{" checked" if as_host else ""}> Post go-live cards as '
+           f'the host (their name and face; needs the bot\'s Manage Webhooks permission in the live channels, '
+           f'otherwise the bot posts them as before)</label>'
            + '<p><button>Save</button> <a href="/hosts/pick">Open the line picker</a></p></form></section>')
     # pictures
     cells = []
@@ -197,6 +202,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         store.put("hosts_on", bool(form.get("on")))
         only = str(form.get("only") or "")
         store.put("hosts_only", only if only in hosts.HOSTS else "")
+        store.put("hosts_webhook", bool(form.get("webhook")))   # flavrpromo/host_webhooks.py SETTING
         raise _back("Hosts saved.", "hosts")
 
     async def save_picture(request: web.Request) -> web.Response:
