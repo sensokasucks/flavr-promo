@@ -49,6 +49,11 @@ up to an hour to show the first time):
     /friend games name      someone's games: streams each and when last (anyone)
     /friend signoff add name line [emoji] | remove name number | list name   the lines someone ends their
                         stream with; one goes on each "was live" card (flavrpromo/signoff.py)
+  Hosts Colette and Clark (flavrpromo/hosts.py, host_cards.py, host_picker.py; owner or Manage Server)
+    /host setup on [only]   hosts on / off; only = always one host (else turns, never 3 in a row).
+                        On: a host line above go-live cards, and reviews wait for picks on /hosts/pick
+    /host picture host kind file   upload a pose (happy, pointing, sleepy), desk or head picture
+    /host list | preview host review card [group]   which pictures exist; draw an opener / desk card
   Community calendar (flavrpromo/promo.py): streams members add from their self-promo posts
     message menu (long-press / right-click a post → Apps) "Add to community calendar" and
         "Remove from community calendar": your own posts with an allowed role; moderators any post
@@ -85,7 +90,7 @@ from discord import app_commands
 from . import focus, sysinfo
 from .calendar import DAY_NAMES, REVIEW_NAMES
 from .config import Settings
-from . import games, promo, signoff, talent
+from . import games, host_picker, hosts, promo, signoff, talent
 from .pings import KINDS, Pinger, length
 from .share import X_STYLES
 from . import groups
@@ -297,7 +302,33 @@ class PromoBot(discord.Client):
         if session.get("started_at"):
             e.timestamp = datetime.fromtimestamp(float(session["started_at"]))
             e.set_footer(text="Started")
+        # the host presenting this card (flavrpromo/hosts.py): name and job on top, their face when
+        # /host picture head was uploaded (sent with the first post as host.<ext>, kept on every edit)
+        key = self._host_of(session)
+        if key:
+            h, face = hosts.HOSTS[key], hosts.picture(key, "head")
+            e.set_author(name=f"{h['name']} · {h['role']}", icon_url=f"attachment://host{face.suffix}" if face else None)
         return e
+
+    # ── the host's line above go-live cards (flavrpromo/hosts.py; off until /host setup on) ──
+    @staticmethod
+    def _host_of(session: Dict[str, Any]) -> str:
+        """The session's host key ("" = no host: hosts were off when it started)."""
+        key = str(session.get("host") or "")
+        return key if key in hosts.HOSTS else ""
+
+    @staticmethod
+    def _host_face(key: str) -> List[discord.File]:
+        """The host's head picture as a fresh attachment (a discord.File can only be sent once)."""
+        face = hosts.picture(key, "head") if key else None
+        return [discord.File(str(face), filename=f"host{face.suffix}")] if face else []
+
+    def _host_say(self, key: str, event: str, person: Dict[str, Any], game: str = "", tag: str = "",
+                  length_s: float = 0, signoff_text: str = "") -> str:
+        """The message text above the card: "☕ **Colette Cappuccino:** <line>" (markdown in names escaped)."""
+        esc = discord.utils.escape_markdown
+        line = hosts.live_line(key, event, esc(person["name"]), esc(game), tag, length_s, signoff_text)
+        return f"{hosts.speaker(key)} {line}"[:2000] if line else ""
 
     async def post_start(self, person, session, live_on) -> Tuple[str, str]:
         """The go-live card, in every place talent.live_channels picks: the group's live channel and
@@ -307,13 +338,24 @@ class PromoBot(discord.Client):
         main = main_platform(person, live_on)
         if not person.get("is_owner"):
             self.pinger.friend_live(person["name"], PLATFORM_ICONS.get(main, main))
+        # the host (when /host setup on): chosen once per stream and saved, so every edit keeps them
+        content, key = None, ""
+        if hosts.enabled(self.store):
+            key = hosts.choose(self.store)
+            segs = self.store.segments(session["id"]) if session.get("id") else []
+            game = segs[-1]["game"] if segs else str(session.get("game") or "")
+            content = self._host_say(key, "start", person, game, segs[-1]["tag"] if segs else "") or None
+            session = {**session, "host": key, "host_game": game}
+            if session.get("id"):
+                self.store.update_session(session["id"], host=key, host_game=game)
         posted: List[List[str]] = []
         for channel_id in talent.live_channels(self.store, person):
             channel = self.get_channel(int(channel_id))
             if channel is None:
                 continue
             try:
-                msg = await channel.send(embed=self.live_embed(person, session, live_on), allowed_mentions=NO_PINGS)
+                msg = await channel.send(content=content, embed=self.live_embed(person, session, live_on),
+                                         files=self._host_face(key), allowed_mentions=NO_PINGS)
             except discord.HTTPException as e:
                 log.warning("go-live post in %s failed: %s", channel_id, e)
                 continue
@@ -346,8 +388,19 @@ class PromoBot(discord.Client):
         return out
 
     async def post_change(self, person, session, live_on) -> None:
+        kw: Dict[str, Any] = {}
+        key = self._host_of(session)
+        if key and session.get("id"):
+            # a new host line only when the game changed since their last line (sessions.host_game)
+            segs = self.store.segments(session["id"])
+            game = segs[-1]["game"] if segs else ""
+            if game and game.lower() != str(session.get("host_game") or "").lower():
+                said = self._host_say(key, "change", person, game, segs[-1]["tag"])
+                if said:
+                    kw["content"] = said
+                self.store.update_session(session["id"], host_game=game)
         for msg in await self._messages(session):
-            await self._edit(msg, embed=self.live_embed(person, session, live_on))
+            await self._edit(msg, embed=self.live_embed(person, session, live_on), **kw)
 
     async def _edit(self, msg: discord.Message, **kw: Any) -> None:
         """Edit one go-live card; a card that can't be edited is skipped. That's a card FlaVR Bot posted
@@ -362,6 +415,16 @@ class PromoBot(discord.Client):
 
     async def post_end(self, person, session) -> None:
         line = signoff.pick(self.store, person["id"], session.get("id"))
+        # the host's closing line; when it reads out the sign-off line, the card doesn't repeat it
+        kw: Dict[str, Any] = {}
+        key = self._host_of(session)
+        if key:
+            said = self._host_say(key, "end", person, length_s=float(session["ended_at"]) - float(session["started_at"]),
+                                  signoff_text=signoff.text(line) if line is not None else "")
+            if said:
+                kw["content"] = said
+                if line is not None and signoff.text(line) in said:
+                    line = None
         for msg in await self._messages(session):
             e = msg.embeds[0] if msg.embeds else discord.Embed()
             e.title = f"{person['name']} was live"
@@ -381,7 +444,7 @@ class PromoBot(discord.Client):
             if line is not None:
                 # their sign-off line (flavrpromo/signoff.py; one per stream, never the same twice in a row)
                 e.add_field(name="\u200b", value=f"*{signoff.text(line)}*"[:1024], inline=False)
-            await self._edit(msg, embed=e)
+            await self._edit(msg, embed=e, **kw)
 
     # ── commands ───────────────────────────────────────────────────────
     def _register(self) -> None:
@@ -1026,6 +1089,91 @@ class PromoBot(discord.Client):
                                       "Settings → allow direct messages.", ephemeral=True)
 
         tree.add_command(calendar)
+
+        # /host: Colette and Clark (flavrpromo/hosts.py, host_cards.py, host_picker.py). Pictures live in
+        # DATA_DIR/hosts; kv hosts_on / hosts_only are the switches.
+        host_cmd = app_commands.Group(name="host", description="Colette and Clark, the hosts who present the posts")
+        host_choices = [app_commands.Choice(name=h["name"], value=k) for k, h in hosts.HOSTS.items()]
+        kind_choices = [app_commands.Choice(name=n, value=k) for k, n in
+                        [("happy", "Pose: happy (busy weeks)"), ("pointing", "Pose: pointing (a new game)"),
+                         ("sleepy", "Pose: sleepy (quiet weeks)"), ("desk", "Desk (the sign-off card)"),
+                         ("head", "Head (small face on go-live cards)")]]
+
+        @host_cmd.command(name="picture", description="Upload a host's picture (a pose, their desk or their head)")
+        @app_commands.choices(host=host_choices, kind=kind_choices)
+        @app_commands.describe(kind="Which picture this is", file="PNG, JPG or WebP, up to 8 MB (see-through PNG is best)")
+        async def host_picture(inter: discord.Interaction, host: app_commands.Choice[str],
+                               kind: app_commands.Choice[str], file: discord.Attachment):
+            if not await managers_only(inter):
+                return
+            if file.size > hosts.MAX_PICTURE:
+                await inter.response.send_message("That picture is over 8 MB.", ephemeral=True)
+                return
+            await inter.response.defer(ephemeral=True, thinking=True)
+            err = hosts.save_picture(host.value, kind.value, await file.read(), file.filename)
+            await inter.followup.send(err or f"Saved {host.name}'s {kind.value} picture.", ephemeral=True)
+
+        @host_cmd.command(name="list", description="Whether hosts are on, and which pictures each host has")
+        async def host_list(inter: discord.Interaction):
+            only = str(bot.store.get("hosts_only") or "")
+            lines = [f"Hosts are **{'on' if hosts.enabled(bot.store) else 'off'}**"
+                     + (f", always {hosts.HOSTS[only]['name']}" if only in hosts.HOSTS else ", taking turns") + "."]
+            for k, h in hosts.HOSTS.items():
+                have = hosts.pictures(k)
+                lines.append(f"{h['emoji']} **{h['name']}** ({h['role']}): "
+                             + " · ".join(f"{kind} {'✅' if ok else '—'}" for kind, ok in have.items()))
+            waiting = host_picker.waiting(bot.store)
+            if waiting and bot.calendar:
+                lines.append(f"{len(waiting)} review(s) waiting for your picks: {host_picker.link(bot.calendar)}")
+            await inter.response.send_message("\n".join(lines), ephemeral=True, allowed_mentions=NO_PINGS)
+
+        @host_cmd.command(name="preview", description="A host's opener or desk card for the newest review (only you see it)")
+        @app_commands.choices(host=host_choices, review=review_choices,
+                              card=[app_commands.Choice(name="Opener (before the board)", value="opener"),
+                                    app_commands.Choice(name="Desk sign-off (after the board)", value="desk")])
+        @app_commands.autocomplete(group=group_auto)
+        async def host_preview(inter: discord.Interaction, host: app_commands.Choice[str],
+                               review: app_commands.Choice[str], card: app_commands.Choice[str],
+                               group: Optional[str] = None):
+            if not bot.calendar:
+                await inter.response.send_message("The calendar isn't running.", ephemeral=True)
+                return
+            g = await pick_group(inter, group)
+            if g is None:
+                return
+            await inter.response.defer(ephemeral=True, thinking=True)
+            # the first candidate line in each slot, like the picker page before anything is picked
+            p = host_picker.make(bot.store, g, review.value, bot.calendar.build_review(g, review.value), "", host.value)
+            png = None
+            if bot.calendar.shooter is not None:
+                try:
+                    png = await bot.calendar.shooter.png(host_picker.card_html(p, card.value))
+                except Exception as e:                  # no Chromium: say so instead of failing
+                    log.warning("host preview failed: %s", e)
+            if not png:
+                await inter.followup.send("Couldn't draw the card (Chromium isn't available).", ephemeral=True)
+                return
+            await inter.followup.send(files=[discord.File(io.BytesIO(png), filename=f"{host.value}-{card.value}.png")],
+                                      ephemeral=True)
+
+        @host_cmd.command(name="setup", description="Turn the hosts on or off, or always use one of them")
+        @app_commands.choices(only=[app_commands.Choice(name="Take turns (random, never 3 in a row)", value="any")]
+                              + host_choices)
+        @app_commands.describe(on="On: hosts speak on go-live cards, and reviews wait for your picks on the picker page",
+                               only="Take turns, or always the same host")
+        async def host_setup(inter: discord.Interaction, on: bool, only: Optional[app_commands.Choice[str]] = None):
+            if not await managers_only(inter):
+                return
+            bot.store.put("hosts_on", bool(on))
+            if only is not None:
+                bot.store.put("hosts_only", "" if only.value == "any" else only.value)
+            text = ("Hosts are on. Go-live cards get a host line, and the Friday / Monday reviews wait for your "
+                    f"picks at {host_picker.link(bot.calendar) if bot.calendar else '/hosts/pick'} "
+                    "(I DM you the link when one is ready)." if on else
+                    "Hosts are off. Cards and reviews post as before.")
+            await inter.response.send_message(text, ephemeral=True)
+
+        tree.add_command(host_cmd)
 
         setup = app_commands.Group(name="setup", description="Bot settings (owner or Manage Server)")
 

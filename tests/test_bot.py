@@ -25,7 +25,7 @@ async def test_commands_register():
         cmd = next(c for c in cal.commands if c.name == name)
         assert "when" in [p.name for p in cmd.parameters], name
     # only the calendar / go-live / reports commands: Stream Core's and server care's stayed in FlaVR Bot
-    assert names == ["calendar", "community", "friend", "group", "live", "me", "pings", "schedule", "setup", "status", "talent"]
+    assert names == ["calendar", "community", "friend", "group", "host", "live", "me", "pings", "schedule", "setup", "status", "talent"]
     me = next(c for c in bot.tree.get_commands() if c.name == "me")
     assert sorted(c.name for c in me.commands) == ["hide", "main", "posts", "schedule", "share", "signoff", "unschedule", "x"]
     friend = next(c for c in bot.tree.get_commands() if c.name == "friend")
@@ -35,6 +35,9 @@ async def test_commands_register():
     for grp in (friend, me):
         so = next(c for c in grp.commands if c.name == "signoff")
         assert sorted(c.name for c in so.commands) == ["add", "list", "remove"]
+    # /host: Colette and Clark (flavrpromo/hosts.py)
+    host = next(c for c in bot.tree.get_commands() if c.name == "host")
+    assert sorted(c.name for c in host.commands) == ["list", "picture", "preview", "setup"]
     group = next(c for c in bot.tree.get_commands() if c.name == "group")
     assert sorted(c.name for c in group.commands) == ["add", "edit", "list", "remove"]
     setup = next(c for c in bot.tree.get_commands() if c.name == "setup")

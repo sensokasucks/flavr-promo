@@ -14,6 +14,8 @@ The week's rhythm (times in TZ; CALENDAR_PREVIEW_HOUR, review times with /setup 
   Monday 10 AM   the WEEKEND review: Friday to Sunday, the same way. (Owner 2026-11-20: weekends
                  are the busy days and people have time for VODs; this replaced the Saturday 11 PM
                  recap. The two cover every day once; calendar.py REVIEWS / review_range.)
+  With hosts on (/host setup on) a review waits at its time for the owner's picks on the picker
+  page, then posts as host opener card, board, host desk card (flavrpromo/host_picker.py).
 A group's posts only start once /setup calendar-channel picks its channel (posted at once, even
 mid-week). If the post is deleted, the next change makes a new one.
 
@@ -63,7 +65,7 @@ from zoneinfo import ZoneInfo
 from .calendar import UPLOAD_ICONS, UPLOAD_NAMES, UPLOADS_HEAD, Tile, Week, build_week, changes, review_range, week_start
 from .share import X_STYLES, article, channel_url, discord_parts, x_posts
 from .render import COVER_H, COVER_W, ImageCache, Screenshotter, cover, day_card, logo_data_url, page
-from . import groups, talent
+from . import groups, host_picker, hosts, talent
 from .store import Store
 
 log = logging.getLogger("flavrpromo.calendar_post")
@@ -433,13 +435,29 @@ class CalendarPoster:
             key = f"calendar_review.{label}.{group}"
             if self.store.get(key) == start.date().isoformat():
                 continue
-            await self.backfill_review(label)           # streams missed while the bot was down
+            # hosts on (/host setup on): the review waits for the owner's picks on the picker page
+            # (flavrpromo/host_picker.py; the first wait DMs the link, one nudge after an hour), then
+            # goes out as the host's opener card, the board, and the host's desk sign-off card
+            picked = None
+            if hosts.enabled(self.store):
+                picked = await host_picker.ready(self, group, label, start.date().isoformat())
+                if picked is None:
+                    continue
+                if not picked.get("opener_sent"):     # once, even if the board has to try again next tick
+                    await host_picker.post_card(self, channel, picked, "opener")
+                    picked["opener_sent"] = True
+                    self.store.put(host_picker.key_of(label, group), picked)
+            else:
+                await self.backfill_review(label)       # streams missed while the bot was down (ready() does it too)
             week = self.build_review(group, label)
             png = await self.png(week)
             if await self.discord.cal_send(channel, embed(week), png, f"{label}-review-{start:%Y-%m-%d}.png"):
                 self.store.put(key, start.date().isoformat())
                 self._note(group, f"{groups.heading(group, True, label)} posted", png)
                 self._share_later(week, png)
+                if picked is not None:
+                    await host_picker.post_card(self, channel, picked, "desk")
+                    host_picker.done(self.store, picked)
 
         # which week the live board shows: a new post for a new week from Sunday PREVIEW_HOUR on
         posted_week = post.get("week") or ""

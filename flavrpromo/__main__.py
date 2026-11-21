@@ -22,7 +22,7 @@ from pathlib import Path
 import aiohttp
 import discord
 
-from . import config, groups
+from . import config, groups, host_picker, hosts
 from .bot import PromoBot
 from .calendar_post import CalendarPoster
 from .import_old import maybe_import
@@ -92,6 +92,10 @@ async def main() -> int:
                           wait_hours=s.promo_wait_hours, poke=poster.poke)
         poster.web_url = s.web_address or web_address(s.listen_port)    # the X Article link in share DMs
         server.extra_routes.append(lambda app: add_routes(app, poster))
+        # Colette and Clark (flavrpromo/hosts.py): their pictures in DATA_DIR/hosts, and the review
+        # line picker page /hosts/pick on the same web server (flavrpromo/host_picker.py)
+        hosts.init(Path(s.data_dir) / "hosts")
+        server.extra_routes.append(lambda app: host_picker.add_routes(app, poster))
 
         # go-live posts first, then a nudge so the calendar redraws within seconds
         async def on_start(person, session, live_on):
