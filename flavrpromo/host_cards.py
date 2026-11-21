@@ -137,11 +137,22 @@ TAPE = ("#f8cf33cc", "#b7ef33cc", "#2ae0d4cc", "#f72ca2cc")     # Colette's tape
 TILT = ("-2deg", "1.5deg", "-1deg", "2.2deg", "-1.6deg", "1deg")
 
 
-def day(key: str, week: Any, i: int, img: Callable[[str], str], line: str = "", chibi_kind: str = "") -> str:
+# the day picture layouts the article editor offers (owner 2026-11-21: "one or two more alternative
+# layouts so i can pick from them"); each one in both hosts' looks. Keep in step with ``day``.
+DAY_LAYOUTS = {"wall": "Pinned wall (every stream the same size)",
+               "timeline": "Timeline (in time order, with stream titles)",
+               "spotlight": "Spotlight (the longest stream big, the rest beside it)"}
+
+
+def day(key: str, week: Any, i: int, img: Callable[[str], str], line: str = "", chibi_kind: str = "",
+        layout: str = "wall") -> str:
     """Day ``i`` of ``week`` (flavrpromo/calendar.py Week) in host ``key``'s look. ``img``: a picture
     address for a thumbnail / avatar URL (render.ImageCache.data_url). ``line``: what the host says
     about the day ("" = no bubble). ``chibi_kind``: which picture stands in the corner (default
-    their happy chibi). Called by flavrpromo/article_editor.py (/settings/article/day)."""
+    their happy chibi). ``layout``: one of DAY_LAYOUTS (unknown = wall).
+    Called by flavrpromo/article_editor.py (/settings/article/day)."""
+    if layout in ("timeline", "spotlight"):
+        return _day_alt(key, week, i, img, line, chibi_kind, layout)
     date = week.start + timedelta(days=i)
     tiles = list(week.days[i])
     shown = tiles if len(tiles) <= DAY_MAX else tiles[:DAY_MAX - 1]
@@ -223,3 +234,140 @@ def day(key: str, week: Any, i: int, img: Callable[[str], str], line: str = "", 
              f'<div style="position:absolute;left:272px;top:98px;font-size:22px;color:#f8cf33;font-weight:700">'
              f'{_e(n_word)} · pinned up by Colette ☕</div><div class=wall>{shots}</div>{side}{say}')
     return _doc("background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a);color:#fff", inner)
+
+
+# ── the other two day layouts: the same host skins (heading, frames, chibi + line) ─────────
+def _skin(key: str, date: Any, n_word: str, pic: str, line: str) -> Dict[str, str]:
+    """A host's look for a day picture: page background, heading, the chibi + line on the right and
+    the CSS for frames (.fr), names (.nm), times (.tm) and titles (.tt)."""
+    plat = (".plat{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:5px;font:800 13px sans-serif;"
+            "display:inline-flex;align-items:center;justify-content:center}.fr i .plat+.plat{right:34px}"
+            ".fr i{display:block;aspect-ratio:16/9;background-repeat:no-repeat;background-size:cover;background-position:center;"
+            "position:relative}")
+    if key == "clark":
+        side = (f'<img src="{pic}" style="position:absolute;right:30px;bottom:40px;width:{DAY_HOST_W - 20}px;height:380px;'
+                f'object-fit:contain;object-position:bottom">' if pic else "")
+        say = (f'<div class=serif style="position:absolute;right:30px;bottom:{440 if pic else 60}px;width:{DAY_HOST_W - 20}px;'
+               f'background:#f4ead8;color:#2b1d12;padding:18px 20px;font-size:22px;line-height:1.4;border-radius:4px;'
+               f'box-shadow:0 8px 20px #0009;font-style:italic">{_e(line)}<div style="text-align:right;margin-top:6px">— C.</div></div>'
+               if line else "")
+        return {"body": "background:linear-gradient(135deg,#1c130d,#3a2416 70%,#4a2a14);color:#f3e6d3",
+                "head": (f'<div class=serif style="position:absolute;left:44px;top:30px;font-size:54px;color:#e0782e">'
+                         f'{_e(f"{date:%A}, {date:%B} {date.day}")}</div>'
+                         f'<div style="position:absolute;left:46px;top:102px;font-size:21px;letter-spacing:2px;color:#d9b88a">'
+                         f'DAY REPORT · {_e(n_word.upper())} · FILED BY CLARK</div>'),
+                "side": side + say, "font": "serif", "accent": "#e0782e",
+                "css": (plat + ".pg{position:absolute;left:40px;top:150px;width:" + str(1520 - DAY_HOST_W) + "px;height:710px;"
+                        "background:#f4ead8;border-radius:6px;box-shadow:0 10px 30px #000a;color:#2b1d12}"
+                        ".fr{background:#fffaf0;padding:8px;box-shadow:0 3px 8px #0004;position:relative}"
+                        ".fr i{background-color:#d9c7a8}"
+                        ".clip{position:absolute;top:-12px;left:22px;width:16px;height:40px;border:4px solid #9aa3ad;border-radius:9px}"
+                        ".nm{font-weight:700;color:#2b1d12}.tm{color:#8a5a33}.tt{color:#5a4030;font-style:italic}"
+                        ".stamp{position:absolute;border:4px solid #b8402a;color:#b8402a;font:700 24px 'DejaVu Serif',serif;"
+                        "letter-spacing:3px;padding:6px 14px;transform:rotate(-6deg);background:#f4ead8cc}")}
+    side = (f'<img src="{pic}" style="position:absolute;right:30px;bottom:30px;width:{DAY_HOST_W - 20}px;height:380px;'
+            f'object-fit:contain;object-position:bottom">' if pic else "")
+    say = (f'<div class=bub style="right:30px;bottom:{420 if pic else 60}px;width:{DAY_HOST_W - 10}px;font-size:22px;'
+           f'border:5px solid #f72ca2">{_e(line)}</div>' if line else "")
+    return {"body": "background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a);color:#fff",
+            "head": (f'<img src="{logo_data_url()}" style="position:absolute;left:40px;top:30px;height:66px">'
+                     f'<div style="position:absolute;left:270px;top:32px;font-size:52px;font-weight:900;letter-spacing:3px">'
+                     f'{_e(f"{date:%A} · {date:%b} {date.day}".upper())}</div>'
+                     f'<div style="position:absolute;left:272px;top:98px;font-size:22px;color:#f8cf33;font-weight:700">'
+                     f'{_e(n_word)} · pinned up by Colette ☕</div>'),
+            "side": side + say, "font": "", "accent": "#f72ca2",
+            "css": (plat + ".pg{position:absolute;left:40px;top:150px;width:" + str(1520 - DAY_HOST_W) + "px;height:720px}"
+                    ".fr{background:#fff;padding:10px;box-shadow:4px 8px 18px #0008;position:relative;color:#1a1a1a}"
+                    ".fr i{background-color:#2a1026}"
+                    ".tape{position:absolute;top:-14px;left:50%;width:110px;height:30px;margin-left:-55px;transform:rotate(-3deg)}"
+                    ".nm{font-weight:900;color:#1a1a1a}.tm{color:#c21c80;font-weight:700}.tt{color:#444}"
+                    ".stamp{position:absolute;background:#f8cf33;color:#2a2116;font:900 24px sans-serif;padding:10px 16px;"
+                    "transform:rotate(-5deg);box-shadow:3px 5px 10px #0007}")}
+
+
+def _day_alt(key: str, week: Any, i: int, img: Callable[[str], str], line: str, chibi_kind: str, layout: str) -> str:
+    """The timeline and spotlight layouts of ``day``.
+    timeline   one row per stream in time order: a time chip, the thumbnail, the name, the stream
+               title and its length (Colette: sticky-note strips in turn; Clark: a ruled ledger page).
+               At most TIMELINE_MAX rows, then "+N more".
+    spotlight  the day's longest stream (else the first) big on the left with a "top pick" / "featured
+               entry" stamp, the others smaller in two columns beside it (at most SPOT_MAX)."""
+    date = week.start + timedelta(days=i)
+    tiles = sorted(week.days[i], key=lambda t: t.at)
+    n_word = f"{len(tiles)} stream{'' if len(tiles) == 1 else 's'}"
+    pic = hosts.data_url(key, chibi_kind or "chibi_happy") or hosts.data_url(key, "chibi_happy")
+    sk = _skin(key, date, n_word, pic, line)
+    clark = key == "clark"
+    area_w = 1520 - DAY_HOST_W
+
+    def bg(t: Any) -> str:
+        src = img(t.thumb) or img(t.avatar)
+        return f"background-image:url(&quot;{_e(src)}&quot;)" if src else ""
+
+    def when(t: Any) -> str:
+        return clock(t.at, week.tz) + (f" · {hm(t.length)}" if t.kind == "past" and t.end else
+                                       " · LIVE" if t.kind == "live" else "")
+
+    def deco(k: int) -> str:
+        return '<div class=clip></div>' if clark else f'<div class=tape style="background:{TAPE[k % len(TAPE)]}"></div>'
+
+    if not tiles:
+        body = (f'<div class=pg style="display:flex;align-items:center;justify-content:center;font-size:34px">'
+                f'{"Nothing on file for this day." if clark else "Nothing on the board yet!"}</div>')
+    elif layout == "timeline":
+        shown = tiles if len(tiles) <= TIMELINE_MAX else tiles[:TIMELINE_MAX - 1]
+        n = len(shown) + (len(tiles) > len(shown))
+        row_h = min(150, (680 - 12 * (n - 1)) // n)
+        thumb_w = int((row_h - 16) * 16 / 9)
+        fs = max(18, min(30, row_h // 4))
+        rows = []
+        for k, t in enumerate(shown):
+            title = _e((t.title or t.game or "")[:90])
+            if clark:
+                box = "border-bottom:2px solid #d8c3a3;padding:6px 18px"
+            else:
+                box = (f"background:{NOTE_COLOURS[k % 3]};padding:8px 18px;transform:rotate({'-0.6' if k % 2 else '0.5'}deg);"
+                       "box-shadow:3px 5px 12px #0007;color:#2a2116")
+            chip = (f'<div class=tm style="width:150px;font-size:{fs}px;flex:none">{_e(clock(t.at, week.tz))}</div>' if clark else
+                    f'<div style="width:150px;flex:none;font:900 {fs}px sans-serif;color:#fff;background:#f72ca2;'
+                    f'border-radius:30px;text-align:center;padding:6px 0">{_e(clock(t.at, week.tz))}</div>')
+            rows.append(f'<div style="display:flex;align-items:center;gap:20px;height:{row_h}px;{box}">{chip}'
+                        f'<div class=fr style="width:{thumb_w}px;padding:4px;flex:none"><i style="{bg(t)}">{_plats(t)}</i></div>'
+                        f'<div style="min-width:0"><div class=nm style="font-size:{fs + 2}px">{_e(t.name)}'
+                        f'<span class=tm style="font-size:{fs - 4}px"> · {_e(when(t).split(" · ", 1)[1] if " · " in when(t) else "")}</span></div>'
+                        f'<div class=tt style="font-size:{fs - 6}px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{title}</div></div></div>')
+        if len(tiles) > len(shown):
+            rows.append(f'<div class=tm style="font-size:24px;padding:4px 18px">+{len(tiles) - len(shown)} more</div>')
+        pad = "padding:20px 30px" if clark else "padding:10px 0"
+        body = f'<div class="pg {sk["font"]}" style="display:flex;flex-direction:column;justify-content:center;gap:12px;{pad}">{"".join(rows)}</div>'
+    else:
+        star = max(tiles, key=lambda t: t.length if t.kind == "past" and t.end else -1) \
+            if any(t.kind == "past" and t.end for t in tiles) else tiles[0]
+        rest = [t for t in tiles if t is not star]
+        more = len(rest) - SPOT_MAX
+        rest = rest[:SPOT_MAX - 1] if more > 0 else rest
+        big_w = 900 if not rest else 820 if len(rest) <= 2 else 740     # more beside it = a smaller star
+        stamp = "FEATURED ENTRY" if clark else "⭐ TOP PICK!"
+        big = (f'<div class=fr style="position:absolute;left:{20 if rest else (area_w - big_w) // 2}px;top:70px;width:{big_w}px;'
+               f'{"" if clark else "transform:rotate(-1.5deg);"}">{deco(0)}<i style="{bg(star)}">{_plats(star)}</i>'
+               f'<div class=nm style="font-size:34px;margin-top:8px">{_e(star.name)}</div>'
+               f'<div class=tm style="font-size:24px">{_e(when(star))}</div>'
+               f'<div class=tt style="font-size:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+               f'{_e((star.title or star.game or "")[:90])}</div>'
+               f'<div class=stamp style="left:-16px;top:-22px">{stamp}</div></div>')
+        small_w = (area_w - big_w - 90 - 20) // 2      # two columns in the space beside it (box left big_w+60, right 10)
+        cells = "".join(
+            f'<div class=fr style="width:{small_w}px;{"" if clark else f"transform:rotate({TILT[k % len(TILT)]});"}">'
+            f'{deco(k + 1)}<i style="{bg(t)}">{_plats(t)}</i><div class=nm style="font-size:18px;margin-top:4px;'
+            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{_e(t.name)}</div>'
+            f'<div class=tm style="font-size:15px">{_e(when(t))}</div></div>' for k, t in enumerate(rest))
+        if more > 0:
+            cells += f'<div class=tm style="width:{small_w}px;font-size:24px;align-self:center">+{more + 1} more</div>'
+        side = (f'<div style="position:absolute;left:{big_w + 60}px;top:40px;right:10px;bottom:20px;display:flex;'
+                f'flex-wrap:wrap;align-content:center;gap:30px 20px">{cells}</div>') if rest else ""
+        body = f'<div class="pg {sk["font"]}">{big}{side}</div>'
+    return _doc(sk["body"], f'<style>{sk["css"]}</style>{sk["head"]}{body}{sk["side"]}')
+
+
+TIMELINE_MAX = 7        # rows on a timeline day picture; more = "+N more" (the article lists them all)
+SPOT_MAX = 6            # small pictures beside a spotlight day picture's big one

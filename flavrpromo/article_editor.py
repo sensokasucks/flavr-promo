@@ -19,7 +19,11 @@ Day pictures come in the host's look by default (owner 2026-11-21: the board-loo
 "dont follow the color scheme and fancy format the hosts come in with"): host_cards.day draws
 Colette's taped polaroids or Clark's filed photos, with the host's line about that day (picked from
 hosts.day_line, editable per day, ↻ for another). "Board look" at the top switches back to
-render.day_card (/calendar/day.png). Drafts: p["day_look"] "host" / "board", p["day_lines"] {day: line}.
+render.day_card (/calendar/day.png). In the host's look a day picture has a layout
+(host_cards.DAY_LAYOUTS: pinned wall, timeline, spotlight; owner 2026-11-21 "one or two more
+alternative layouts so i can pick from them"): one for the whole article at the top, and each day
+can pick its own. Drafts: p["day_look"] "host" / "board", p["day_lines"] {day: line},
+p["day_layout"] the article's layout, p["day_layouts"] {day: layout, "" = the article's}.
 "Open the finished article" shows it on the copy page (flavrpromo/web.py ``article_html``): the host
 pictures sit in Save blocks like the day pictures (X can't fetch pictures from the home network).
 
@@ -267,7 +271,11 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
             buttons += f'<button name=action value="regen:{sid}">↻ Regen from the calendar</button>'
             line = ""
             if sid.startswith("day") and p.get("day_look", "host") == "host":
-                line = (f'<label>{_e(hosts.HOSTS[p["host"]]["name"])}\'s line on this picture '
+                mine = (p.get("day_layouts") or {}).get(sid[3:], "")
+                lay = "".join(f'<option value="{v}"{" selected" if v == mine else ""}>{_e(n)}</option>'
+                              for v, n in [("", "Layout: same as the article")] + list(host_cards.DAY_LAYOUTS.items()))
+                line = (f'<label>Layout <select name="daylayout_{sid[3:]}">{lay}</select></label>'
+                        f'<label>{_e(hosts.HOSTS[p["host"]]["name"])}\'s line on this picture '
                         f'<input name="dayline_{sid[3:]}" value="{_e((p.get("day_lines") or {}).get(sid[3:], ""))}" '
                         f'maxlength=200 style="width:100%"><small>Empty = no bubble. ↻ Regen also picks another line.</small></label>')
             body = line + f'<div class=box>{section_html(dkey, p, s)}</div>'
@@ -289,9 +297,11 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
     look = p.get("day_look", "host")
     lopts = "".join(f'<option value="{v}"{" selected" if v == look else ""}>{_e(n)}</option>'
                     for v, n in (("host", "In the host's look (with their line)"), ("board", "Board look")))
+    alls = "".join(f'<option value="{v}"{" selected" if v == p.get("day_layout", "wall") else ""}>{_e(n)}</option>'
+                   for v, n in host_cards.DAY_LAYOUTS.items())
     head = (f'<p>Host <select name=host>{hopts}</select> <button name=action value=host class=alt>Change host</button> '
             f'<small>Changing the host gives new lines for both host sections and the day pictures.</small></p>'
-            f'<p>Day pictures <select name=day_look>{lopts}</select> <button name=action value=save class=alt>Apply</button></p>{ai_note}'
+            f'<p>Day pictures <select name=day_look>{lopts}</select> <select name=day_layout>{alls}</select> <button name=action value=save class=alt>Apply</button></p>{ai_note}'
             f'<p class=help>Calendar sections are as of {built}. <button name=action value=regen_all class=alt>↻ Regen every '
             f'calendar section</button> <button name=action value=add_text class=alt>+ Add a text section</button> '
             f'<button name=action value=reset class=alt>Start over</button></p>')
@@ -344,7 +354,12 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
         p["pose"] = v if v in hosts.POSES else ""
     if str(form.get("day_look") or "") in ("host", "board"):
         p["day_look"] = str(form.get("day_look"))
+    if str(form.get("day_layout") or "") in host_cards.DAY_LAYOUTS:
+        p["day_layout"] = str(form.get("day_layout"))
     for i in range(7):
+        v = str(form.get(f"daylayout_{i}") or "")
+        if f"daylayout_{i}" in form and (v in host_cards.DAY_LAYOUTS or not v):
+            p.setdefault("day_layouts", {})[str(i)] = v
         if f"dayline_{i}" in form:
             p.setdefault("day_lines", {})[str(i)] = " ".join(str(form.get(f"dayline_{i}") or "").split())[:200]
     for sid in list(p.get("texts") or {}):
@@ -472,7 +487,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
         week, _ = await _article(poster, p)
         await poster.images.fetch_all(week)         # the stream thumbnails, cached like the board's
         png = await poster.shooter.png(host_cards.day(p["host"], week, i, poster.images.data_url,
-                                                      (p.get("day_lines") or {}).get(str(i), "")))
+                                                      (p.get("day_lines") or {}).get(str(i), ""),
+                                                      layout=(p.get("day_layouts") or {}).get(str(i)) or p.get("day_layout", "wall")))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
 
     async def view(request: web.Request) -> web.Response:

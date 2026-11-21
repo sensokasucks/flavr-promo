@@ -143,6 +143,14 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             assert "pinned up by Colette" in poster.shooter.docs[-1]
             view = await (await c.get(f"/settings/article/view?d={dkey}")).text()
             assert "/settings/article/day?d=" in view and "/calendar/day.png" not in view.split('id="body"')[1]
+            # the other layouts: for the whole article, or one day on its own
+            for lay, mark in (("timeline", "pinned up by Colette"), ("spotlight", "TOP PICK")):
+                p = await act("save", on_summary="", day_layout=lay)
+                await c.get(f"/settings/article/day?d={dkey}&day={day[3:]}")
+                assert mark in poster.shooter.docs[-1] and p["day_layout"] == lay
+            p = await act("save", on_summary="", day_layout="wall", **{f"daylayout_{day[3:]}": "spotlight"})
+            await c.get(f"/settings/article/day?d={dkey}&day={day[3:]}")
+            assert "TOP PICK" in poster.shooter.docs[-1]
             p = await act("save", on_summary="", day_look="board")
             view = await (await c.get(f"/settings/article/view?d={dkey}")).text()
             assert "/calendar/day.png" in view.split('id="body"')[1]
