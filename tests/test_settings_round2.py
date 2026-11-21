@@ -135,9 +135,9 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             assert "back to the article editor" in view and "outro-colette-sleepy.png" in view
             # day pictures in the host's look (owner 2026-11-21), with an editable line per day
             day = next(s["id"] for s in p["sections"] if s["id"].startswith("day"))
-            assert p["day_look"] == "host" and p["day_lines"][day[3:]]
-            p = await act("save", on_summary="", **{f"dayline_{day[3:]}": "Mark it, team!"})
-            assert p["day_lines"][day[3:]] == "Mark it, team!"
+            assert p["day_look"] == "host" and p["candidates"][day]          # the day's line is a slot like the others
+            p = await act("save", on_summary="", **{day: "__custom", f"{day}__text": "Mark it, team!"})
+            assert host_picker.chosen(p, day) == "Mark it, team!"
             r = await c.get(f"/settings/article/day?d={dkey}&day={day[3:]}")
             assert r.status == 200 and "Mark it, team!" in poster.shooter.docs[-1]
             assert "pinned up by Colette" in poster.shooter.docs[-1]
@@ -155,6 +155,31 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             p = await act("save", on_summary="", day_look="board")
             view = await (await c.get(f"/settings/article/view?d={dkey}")).text()
             assert "/calendar/day.png" in view.split('id="body"')[1]
+            # per-line buttons (Sen: no scrolling up, no changing every line): ↻ one slot, ✨ one slot
+            p = await act("reroll:desk_signoff", on_summary="")
+            assert p["picks"]["desk_signoff"] and host_picker.chosen(p, "opener") == "Big week, people!"
+
+            class Kob:
+                per_slot = 2
+
+                async def generate(self, text):
+                    self.prompt = text
+                    return '"Fresh line one!", "Fresh line two!"]'
+            poster.kobold = Kob()
+            p = await act("ask:desk_nudge", on_summary="")
+            assert host_picker.chosen(p, "desk_nudge") == "Fresh line one!" and "Fresh line two!" in p["ai"]
+            assert host_picker.chosen(p, "opener") == "Big week, people!"           # the others keep their picks
+            p = await act(f"ask:{day}", on_summary="", day_look="host")
+            assert host_picker.chosen(p, day) == "Fresh line one!" and "this day's picture" in poster.kobold.prompt
+            page = await (await c.get("/settings/article?group=flavr&which=week")).text()
+            assert f'value="ask:{day}"' in page and 'value="reroll:opener"' in page
+            poster.kobold = None
+            p = await act("save", on_summary="", **{day: "__none"})
+            assert host_picker.chosen(p, day) == ""                                  # no bubble
+            # the cover in the host's look (Sen: "the article cover is still in the old style")
+            r = await c.get(f"/settings/article/cover?d={dkey}")
+            assert r.status == 200 and "WEEK IN REVIEW" in poster.shooter.docs[-1]
+            assert "/settings/article/cover?d=" in await (await c.get(f"/settings/article/view?d={dkey}")).text()
             # the other host, then start over
             p = await act("host", on_summary="", host="clark")
             assert p["host"] == "clark" and not p["picks"]

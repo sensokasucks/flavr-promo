@@ -44,7 +44,8 @@ built-in", and every host line slot for both hosts as editable text. Linked at t
   (templates, or ✨ KoboldCpp), day pictures in the host's look (Colette's taped polaroids or
   Clark's filed photos, with their line about the day; layouts: pinned wall, timeline, spotlight, two columns, zigzag or cards,
   for the whole article or per day) or the board look, pick each host section's picture (opener card with chibi or regular
-  big, desk card, one plain picture, or none), then open the finished article to copy.
+  big, desk card, one plain picture, or none), each line has its own ↻ (another template line) and ✨ (new KoboldCpp lines for just that
+  line), and the cover comes in the host's look too; then open the finished article to copy.
 - `/settings/commands`: a form for every slash command, run as the owner; the answer shows on the
   page (things a command posts in a channel still go there).
 
