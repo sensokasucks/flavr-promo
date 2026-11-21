@@ -48,6 +48,8 @@ ASKS = {
     "desk_highlight": "Write {n} closing lines about the highlight of the {heading}.",
     "desk_nudge": "Write {n} short 'for next time' nudges for the group.",
     "desk_signoff": "Write {n} short sign-off lines (you are leaving your desk).",
+    # the article editor's day pictures (flavrpromo/article_editor.py ``ask_slot``; the facts are that day's)
+    "day": "Write {n} short lines for this day's picture: who streams and when.",
 }
 
 

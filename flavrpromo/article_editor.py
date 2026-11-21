@@ -22,8 +22,17 @@ hosts.day_line, editable per day, ↻ for another). "Board look" at the top swit
 render.day_card (/calendar/day.png). In the host's look a day picture has a layout
 (host_cards.DAY_LAYOUTS: pinned wall, timeline, spotlight; owner 2026-11-21 "one or two more
 alternative layouts so i can pick from them"): one for the whole article at the top, and each day
-can pick its own. Drafts: p["day_look"] "host" / "board", p["day_lines"] {day: line},
-p["day_layout"] the article's layout, p["day_layouts"] {day: layout, "" = the article's}.
+can pick its own. Drafts: p["day_look"] "host" / "board", p["day_layout"] the article's layout,
+p["day_layouts"] {day: layout, "" = the article's}.
+
+Every line (round 2, owner 2026-11-21: "a better way to regen the open/close cards ... kobold regen
+lines in each section so i dont have to scroll to the top and get forced to change all the lines")
+is its own slot with its own buttons: ↻ shuffles in another template line for just that slot, ✨ asks
+KoboldCpp for new lines for just that slot (one request, the page waits for it) and picks the first
+one; the other slots keep their picks. A day picture's line is slot "day<N>" in p["candidates"]
+(its template facts in p["day_facts"][N], the KoboldCpp facts sentence in p["day_text"][N]).
+The cover (/settings/article/cover) comes in the host's look too (host_cards.cover; p["cover_look"]
+"host" / "board", p["cover_figure"] which picture stands on it).
 "Open the finished article" shows it on the copy page (flavrpromo/web.py ``article_html``): the host
 pictures sit in Save blocks like the day pictures (X can't fetch pictures from the home network).
 
@@ -47,8 +56,8 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from . import groups, host_cards, host_picker, hosts
-from .render import clock
+from . import groups, host_cards, host_picker, hosts, kobold
+from .render import COVER_H, COVER_W, clock
 from .settings_page import _e, frame
 from .web import article_html, article_query, build_article, get_week
 
@@ -112,7 +121,7 @@ async def new_draft(poster: Any, group: str, which: str, host: str = "") -> Dict
          "sections": [{"id": "intro", "title": HOST_SECTIONS["intro"], "on": True}]
          + [dict(s, on=True) for s in a["sections"]]
          + [{"id": "outro", "title": HOST_SECTIONS["outro"], "on": True}]}
-    p["day_look"], p["day_lines"] = "host", {}
+    p["day_look"], p["cover_look"], p["cover_figure"] = "host", "host", "happy"
     _host_lines(p)
     _day_lines(p, week)
     return p
@@ -121,7 +130,6 @@ async def new_draft(poster: Any, group: str, which: str, host: str = "") -> Dict
 def _day_lines(p: Dict[str, Any], week: Any, only: str = "") -> None:
     """The host's line for each day picture (hosts.day_line with that day's first stream); ``only``:
     just that day's index (its Regen), else every day (a new draft, a new host, Regen all)."""
-    lines = p.setdefault("day_lines", {})
     for i, tiles in enumerate(week.days):
         if (only and str(i) != only) or not tiles:
             continue
@@ -130,7 +138,81 @@ def _day_lines(p: Dict[str, Any], week: Any, only: str = "") -> None:
         # hosts.day_line's own blanks, but "on Tuesday" for {when_lower} (its day posts say "today")
         facts = {"when": f"{date:%A}", "when_lower": f"on {date:%A}", "count": len(tiles),
                  "first_name": first.name, "first_time": clock(first.at, week.tz)}
-        lines[str(i)] = hosts.one(p["host"], "day_one" if len(tiles) == 1 else "day_many", facts, "day_many")
+        p.setdefault("day_facts", {})[str(i)] = facts
+        names = ", ".join(dict.fromkeys(t.name for t in sorted(tiles, key=lambda t: t.at)))
+        p.setdefault("day_text", {})[str(i)] = (f"{date:%A}: {len(tiles)} stream{'' if len(tiles) == 1 else 's'} "
+                                                f"({names}), {first.name} first at {facts['first_time']}.")
+        slot = f"day{i}"
+        p.setdefault("candidates", {})[slot] = random.sample(_day_templates(p, i), len(_day_templates(p, i)))
+        (p.get("picks") or {}).pop(slot, None)
+
+
+def _day_templates(p: Dict[str, Any], i: int) -> List[str]:
+    """Every template line for day ``i``'s picture in the draft host's voice."""
+    f = (p.get("day_facts") or {}).get(str(i)) or {}
+    return hosts.lines(p["host"], "day_one" if f.get("count") == 1 else "day_many", f) or hosts.lines(p["host"], "day_many", f)
+
+
+def migrate(p: Dict[str, Any]) -> Dict[str, Any]:
+    """A draft from before per-slot lines (p["day_lines"] {N: line}) → candidates day<N>."""
+    for k, v in (p.pop("day_lines", None) or {}).items():
+        p.setdefault("candidates", {}).setdefault(f"day{k}", [v] if v else [])
+    p.setdefault("cover_look", "host")
+    p.setdefault("cover_figure", "happy")
+    return p
+
+
+def slot_section(slot: str) -> str:
+    """Which section a slot's lines belong to (the page jumps back there after its buttons)."""
+    if slot.startswith("day"):
+        return slot
+    return "intro" if slot.startswith(("opener", "note")) else "outro"
+
+
+def reroll(p: Dict[str, Any], slot: str) -> str:
+    """↻ for one slot: its template lines shuffled, a different one picked. Returns the page note."""
+    if slot.startswith("day"):
+        fresh = _day_templates(p, int(slot[3:]))
+    else:
+        fresh = hosts.review_candidates(p["host"], p["facts"]).get(slot) or []
+    if not fresh:
+        return "No other template lines for that one."
+    cur = host_picker.chosen(p, slot)
+    ai = [x for x in (p.get("candidates") or {}).get(slot) or [] if x in set(p.get("ai") or [])]
+    order = random.sample(fresh, len(fresh))
+    order.sort(key=lambda x: x == cur)              # the current line goes last, so something new is picked
+    p["candidates"][slot] = order + [x for x in ai if x not in order]
+    p.setdefault("picks", {})[slot] = order[0]
+    return "Another line." if order[0] != cur else "That's the only template line for it."
+
+
+async def ask_slot(poster: Any, p: Dict[str, Any], slot: str) -> str:
+    """✨ for one slot: one KoboldCpp request for new lines for just that slot (the page waits; one
+    request takes seconds to a minute). New lines go first, marked ✨, and the first is picked."""
+    kob = getattr(poster, "kobold", None)
+    if kob is None:
+        return "KoboldCpp isn't set up (Settings → KoboldCpp)."
+    a = kobold.asks()
+    if slot.startswith("day"):
+        ask, facts = a["day"], (p.get("day_text") or {}).get(slot[3:], "")
+    elif slot.startswith("note"):
+        n = (p.get("notes") or [{}] * 4)[int(slot[4:])]
+        ask = a["note"].replace("{note}", f"{n.get('label', '').lower()}: {n.get('value', '')}")
+        facts = kobold.facts_text(p.get("facts") or {})
+    else:
+        ask, facts = a.get(slot, a["opener"]), kobold.facts_text(p.get("facts") or {})
+    heading = host_picker.heading_of(p, "review")
+    got = await kob.generate(kobold.prompt(p["host"], kobold.fill_ask(ask, kob.per_slot, heading), facts))
+    if got is None:
+        return "KoboldCpp couldn't be reached."
+    have = (p.get("candidates") or {}).get(slot) or []
+    new = [x for x in kobold.parse(got) if x not in have][:kob.per_slot]
+    if not new:
+        return "KoboldCpp answered, but with no usable lines. Try ✨ again."
+    p["candidates"][slot] = new + have
+    p["ai"] = list(p.get("ai") or []) + new
+    p.setdefault("picks", {})[slot] = new[0]
+    return f"✨ {len(new)} new line{'' if len(new) == 1 else 's'} from KoboldCpp (the first one is picked)."
 
 
 def _refresh(p: Dict[str, Any], a: Dict[str, Any], only: str = "") -> str:
@@ -217,7 +299,9 @@ def _picker(store: Any, group: str, which: str) -> str:
             f'<label>Article <select name=which>{wopts}</select></label><button>Open</button></form>')
 
 
-def _line_choices(p: Dict[str, Any], slot: str, title: str) -> str:
+def _line_choices(p: Dict[str, Any], slot: str, title: str, ai_on: bool = False, none: str = "") -> str:
+    """One slot's lines as radio buttons, "your own", and its own ↻ / ✨ buttons in the legend.
+    ``none``: a label for a "no line" choice (day pictures: no bubble)."""
     cands = (p.get("candidates") or {}).get(slot) or []
     cur = host_picker.chosen(p, slot)
     ai = set(p.get("ai") or [])
@@ -226,7 +310,13 @@ def _line_choices(p: Dict[str, Any], slot: str, title: str) -> str:
     custom = cur if cur and cur not in cands else ""
     opts += (f'<label><input type=radio name="{slot}" value="__custom"{" checked" if custom else ""}> your own: '
              f'<input name="{slot}__text" value="{_e(custom)}" maxlength=300></label>')
-    return f"<fieldset><legend>{_e(title)}</legend>{opts}</fieldset>"
+    if none:
+        off = slot in (p.get("picks") or {}) and not p["picks"][slot]
+        opts += f'<label><input type=radio name="{slot}" value="__none"{" checked" if off else ""}> {_e(none)}</label>'
+    btns = (f' <button name=action value="reroll:{slot}" class="alt mini" title="Another template line">↻</button>'
+            + (f' <button name=action value="ask:{slot}" class="alt mini ask" title="New lines from KoboldCpp">✨</button>'
+               if ai_on else ""))
+    return f"<fieldset><legend>{_e(title)}{btns}</legend>{opts}</fieldset>"
 
 
 def _host_controls(dkey: str, p: Dict[str, Any], sid: str, ai_on: bool) -> str:
@@ -236,7 +326,7 @@ def _host_controls(dkey: str, p: Dict[str, Any], sid: str, ai_on: bool) -> str:
         if slot.startswith("note"):
             n = (p.get("notes") or [])[int(slot[4:])] if int(slot[4:]) < len(p.get("notes") or []) else {}
             title = f"opener card note: {n.get('label', '').lower()} ({n.get('value', '')})"
-        rows.append(_line_choices(p, slot, title))
+        rows.append(_line_choices(p, slot, title, ai_on))
     cur = (p.get("pics") or {}).get(sid, "none")
     pics = list(CARD_PICS.items()) + [(f"pic:{k}", f"Just the picture: {k.replace('_', ' ')}")
                                       for k, v in hosts.pictures(p["host"]).items() if v]
@@ -253,7 +343,8 @@ def _host_controls(dkey: str, p: Dict[str, Any], sid: str, ai_on: bool) -> str:
                  + "</select></label>")
     elif cur == "desk":
         swap = host_picker._switch(p, "desk_kind", "desk card picture", (("desk", "regular"), ("chibi_desk", "chibi")))
-    ai = (f'<button name=action value="ai:{sid}" class=alt>✨ Ask KoboldCpp for new lines</button>' if ai_on else "")
+    ai = (f'<button name=action value="ai:{sid}" class=alt>✨ New lines for every slot here (in the background)</button>'
+          if ai_on else "")
     return (f'<div class=two><div>{"".join(rows)}</div><div><label>Picture <select name="pic_{sid}">{sel}</select>'
             f'</label>{swap}<p>{ai}</p></div></div>')
 
@@ -275,9 +366,8 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
                 lay = "".join(f'<option value="{v}"{" selected" if v == mine else ""}>{_e(n)}</option>'
                               for v, n in [("", "Layout: same as the article")] + list(host_cards.DAY_LAYOUTS.items()))
                 line = (f'<label>Layout <select name="daylayout_{sid[3:]}">{lay}</select></label>'
-                        f'<label>{_e(hosts.HOSTS[p["host"]]["name"])}\'s line on this picture '
-                        f'<input name="dayline_{sid[3:]}" value="{_e((p.get("day_lines") or {}).get(sid[3:], ""))}" '
-                        f'maxlength=200 style="width:100%"><small>Empty = no bubble. ↻ Regen also picks another line.</small></label>')
+                        + _line_choices(p, sid, f'{hosts.HOSTS[p["host"]]["name"]}\'s line on this picture', ai_on,
+                                        none="no line (no bubble)"))
             body = line + f'<div class=box>{section_html(dkey, p, s)}</div>'
         elif kind == "host":
             buttons += f'<button name=action value="regen:{sid}">↻ New lines</button>'
@@ -299,9 +389,19 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
                     for v, n in (("host", "In the host's look (with their line)"), ("board", "Board look")))
     alls = "".join(f'<option value="{v}"{" selected" if v == p.get("day_layout", "wall") else ""}>{_e(n)}</option>'
                    for v, n in host_cards.DAY_LAYOUTS.items())
+    cov = p.get("cover_look", "host")
+    copts = "".join(f'<option value="{v}"{" selected" if v == cov else ""}>{_e(n)}</option>'
+                    for v, n in (("host", "In the host's look"), ("board", "Board look")))
+    fig = p.get("cover_figure", "happy")
+    fopts = "".join(f'<option value="{k}"{" selected" if k == fig else ""}>{_e(k.replace("_", " "))}</option>'
+                    for k, v in hosts.pictures(p["host"]).items() if v and k not in ("head", "chibi_head"))
+    cover = (f'<div class=covrow><p>Cover <select name=cover_look>{copts}</select> '
+             + (f'<select name=cover_figure>{fopts}</select> ' if cov == "host" else "")
+             + f'<button name=action value=save class=alt>Apply</button></p>'
+             f'<img class=cov src="{_e(_cover_url(dkey, p))}" alt="cover" loading=lazy></div>')
     head = (f'<p>Host <select name=host>{hopts}</select> <button name=action value=host class=alt>Change host</button> '
             f'<small>Changing the host gives new lines for both host sections and the day pictures.</small></p>'
-            f'<p>Day pictures <select name=day_look>{lopts}</select> <select name=day_layout>{alls}</select> <button name=action value=save class=alt>Apply</button></p>{ai_note}'
+            f'<p>Day pictures <select name=day_look>{lopts}</select> <select name=day_layout>{alls}</select> <button name=action value=save class=alt>Apply</button></p>{cover}{ai_note}'
             f'<p class=help>Calendar sections are as of {built}. <button name=action value=regen_all class=alt>↻ Regen every '
             f'calendar section</button> <button name=action value=add_text class=alt>+ Add a text section</button> '
             f'<button name=action value=reset class=alt>Start over</button></p>')
@@ -321,8 +421,20 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
              "background:#0e0f14}fieldset{border:1px solid #555;border-radius:8px;margin:8px 0}"
              "fieldset label{margin:4px 0}.ai{color:#b7ef33}a.btn{background:#2a2d3a;color:#fff;padding:8px 12px;"
              "border-radius:8px;text-decoration:none;font-weight:bold}.bar{position:sticky;bottom:0;background:#1b1018;"
-             "padding:10px 0;margin:0}button[disabled]{opacity:.35}")
+             "padding:10px 0;margin:0}button[disabled]{opacity:.35}legend .mini{padding:2px 9px;margin-left:4px;font-size:14px}"
+             ".cov{width:min(600px,100%);border-radius:8px;display:block}")
+    # ✨ waits for KoboldCpp (one request): show that it's working instead of a page that looks stuck
+    body += ("<script>document.querySelector('form[method=post]').addEventListener('submit',e=>{const b=e.submitter;"
+             "if(b&&/^(ask|ai):/.test(b.value)){b.textContent='✨ writing… (up to a minute)';"
+             "setTimeout(()=>document.querySelectorAll('button').forEach(x=>x.disabled=true),0)}});</script>")
     return frame("Article editor", "📰 Article editor", body, saved, style)
+
+
+def _cover_url(dkey: str, p: Dict[str, Any]) -> str:
+    """The cover picture for the page and the copy page: the host's look, or the board's."""
+    if p.get("cover_look", "host") == "host":
+        return f"/settings/article/cover?d={quote(dkey)}&t={int(p.get('saved_at') or 0)}"
+    return "/calendar/cover.png" + article_query(p["group"], p.get("label") or "", int(p.get("off") or 0))
 
 
 def _save_form(p: Dict[str, Any], form: Any) -> None:
@@ -338,6 +450,9 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
         if f"{slot}" not in form:
             continue
         v = str(form.get(slot) or "")
+        if v == "__none":
+            picks[slot] = ""                    # a day picture without a bubble
+            continue
         if v == "__custom":
             v = " ".join(str(form.get(f"{slot}__text") or "").split())[:300]
         if v:
@@ -345,6 +460,10 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
         else:
             picks.pop(slot, None)
     p["picks"] = picks
+    if str(form.get("cover_look") or "") in ("host", "board"):
+        p["cover_look"] = str(form.get("cover_look"))
+    if str(form.get("cover_figure") or "") in hosts.KINDS:
+        p["cover_figure"] = str(form.get("cover_figure"))
     if str(form.get("opener_kind") or "") in ("pose", "chibi"):
         p["opener_kind"] = str(form.get("opener_kind"))
     if str(form.get("desk_kind") or "") in ("desk", "chibi_desk"):
@@ -360,8 +479,6 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
         v = str(form.get(f"daylayout_{i}") or "")
         if f"daylayout_{i}" in form and (v in host_cards.DAY_LAYOUTS or not v):
             p.setdefault("day_layouts", {})[str(i)] = v
-        if f"dayline_{i}" in form:
-            p.setdefault("day_lines", {})[str(i)] = " ".join(str(form.get(f"dayline_{i}") or "").split())[:200]
     for sid in list(p.get("texts") or {}):
         if f"text_{sid}" in form:
             p["texts"][sid] = str(form.get(f"text_{sid}") or "").replace("\r\n", "\n").strip()[:MAX_TEXT]
@@ -384,7 +501,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         if not p:
             p = await new_draft(poster, group, which)
             store.put(dkey, p)
-        return dkey, p
+        return dkey, migrate(p)
 
     async def get(request: web.Request) -> web.Response:
         group = groups.find(request.query.get("group", "")) or "flavr"
@@ -402,6 +519,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         p = store.get(dkey) if dkey.startswith(PREFIX) else None
         if not p:
             raise web.HTTPSeeOther("/settings/article?saved=" + quote("That draft is gone; here's a fresh one."))
+        migrate(p)
         action = str(form.get("action") or "save")
         verb, _, sid = action.partition(":")
         _save_form(p, form)
@@ -432,6 +550,10 @@ def add_routes(app: web.Application, poster: Any) -> None:
                 week, _ = await _article(poster, p)
                 _day_lines(p, week)                 # the day pictures' lines in the new host's voice
                 note = f"{hosts.HOSTS[new]['name']} presents this one now."
+        elif verb == "reroll" and sid in (p.get("candidates") or {}):
+            note, anchor = reroll(p, sid), slot_section(sid)
+        elif verb == "ask" and sid in (p.get("candidates") or {}):
+            note, anchor = await ask_slot(poster, p, sid), slot_section(sid)
         elif verb == "regen" and sid in HOST_SECTIONS:
             _host_lines(p, shuffle=True, only=SLOTS[sid])
             note = "New lines."
@@ -476,6 +598,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
         """A day picture in the host's look (host_cards.day), with the draft's line for that day."""
         dkey = request.query.get("d", "")
         p = store.get(dkey) if dkey.startswith(PREFIX) else None
+        if p:
+            migrate(p)
         try:
             i = int(request.query.get("day", ""))
         except ValueError:
@@ -487,8 +611,24 @@ def add_routes(app: web.Application, poster: Any) -> None:
         week, _ = await _article(poster, p)
         await poster.images.fetch_all(week)         # the stream thumbnails, cached like the board's
         png = await poster.shooter.png(host_cards.day(p["host"], week, i, poster.images.data_url,
-                                                      (p.get("day_lines") or {}).get(str(i), ""),
+                                                      host_picker.chosen(p, f"day{i}"),
                                                       layout=(p.get("day_layouts") or {}).get(str(i)) or p.get("day_layout", "wall")))
+        return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
+
+    async def cover_picture(request: web.Request) -> web.Response:
+        """The X Article cover in the host's look (host_cards.cover), 5:2 like the board's cover."""
+        dkey = request.query.get("d", "")
+        p = store.get(dkey) if dkey.startswith(PREFIX) else None
+        if not p:
+            raise web.HTTPNotFound()
+        migrate(p)
+        if poster.shooter is None:
+            raise web.HTTPServiceUnavailable(text="No Chromium for pictures.")
+        week, _ = await _article(poster, p)
+        await poster.images.fetch_all(week)
+        heading = host_picker.heading_of(p, "Week in Review")
+        png = await poster.shooter.png(host_cards.cover(p["host"], week, poster.images.data_url, heading,
+                                                        p.get("cover_figure") or "happy"), size=(COVER_W, COVER_H))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
 
     async def view(request: web.Request) -> web.Response:
@@ -497,6 +637,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         p = store.get(dkey) if dkey.startswith(PREFIX) else None
         if not p:
             raise web.HTTPNotFound()
+        migrate(p)
         week, a = await _article(poster, p)
         out = finished(dkey, p)
         out["title"], out["pictures"] = a["title"], a["pictures"]
@@ -506,7 +647,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         # the zip holds the board-look day pictures, so it's only offered when the article uses those
         zip_url = "/calendar/article.zip" + q if p.get("day_look", "host") == "board" else ""
         return web.Response(text=article_html(out, "/calendar.png" + q, zip_url,
-                                              "/calendar/cover.png" + q, top=back),
+                                              _cover_url(dkey, p), top=back),
                             content_type="text/html", charset="utf-8")
 
     app.router.add_get("/settings/article", get)
@@ -514,6 +655,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
     app.router.add_get("/settings/article/picture", picture)
     app.router.add_get("/settings/article/view", view)
     app.router.add_get("/settings/article/day", day_picture)
+    app.router.add_get("/settings/article/cover", cover_picture)
 
 
 __all__ = ["add_routes", "new_draft", "finished", "section_html", "draft_key"]
