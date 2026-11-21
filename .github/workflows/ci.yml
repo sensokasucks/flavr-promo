@@ -1,0 +1,26 @@
+# Runs the tests on every push and pull request (no network or Discord needed).
+name: tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q
+  # Builds the Docker image the way Portainer does, so a broken Dockerfile (a base image
+  # moving to a new Debian, a missing package) shows up here instead of on the Linux box.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t flavr-promo-ci .
+      - name: Chromium draws a page inside the image
+        run: >
+          docker run --rm --entrypoint python flavr-promo-ci -c
+          "import asyncio; from flavrpromo.render import Screenshotter;
+          png = asyncio.run(Screenshotter().png('<h1>FlaVR 日本語 ✓</h1>'));
+          assert png[:4] == b'\x89PNG', 'no picture'; print('picture', len(png), 'bytes')"
