@@ -18,6 +18,8 @@ Tables
             on each refresh (flavrpromo/watcher.py refresh_schedules / YouTube checks).
   manual_schedule  regular weekly times set by hand with /friend schedule (Kick has no schedule
             API; anyone else who doesn't use their platform's schedule).
+  signoffs  each person's sign-off lines ("otsu-nuggies", optional emoji), several each; one is
+            picked for their "was live" card (flavrpromo/signoff.py, /friend signoff, /me signoff).
   promo     the community calendar (flavrpromo/promo.py): streams members added from their self-promo
             posts. One row per stream: platform, what the link points at (item_key: a YouTube video
             id, a Twitch VOD id, or "<channel>@<time>" for a Twitch / Kick channel link), its state
@@ -153,6 +155,14 @@ CREATE TABLE IF NOT EXISTS manual_schedule (
   title TEXT NOT NULL DEFAULT '',
   platform TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS signoffs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  line TEXT NOT NULL,
+  emoji TEXT NOT NULL DEFAULT '',
+  added_at REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS signoffs_person ON signoffs(person_id);
 """
 
 # Columns added after round 1. A database made by round 1 gets them on start (Store.__init__);
@@ -493,6 +503,37 @@ class Store:
             cur = self._db.execute("DELETE FROM manual_schedule WHERE person_id=?", (person_id,))
             self._db.commit()
             return cur.rowcount
+
+    # ── sign-off lines (flavrpromo/signoff.py) ─────────────────────────
+    def signoff_add(self, person_id: int, line: str, emoji: str = "") -> int:
+        """A new sign-off line; returns its id, or 0 when that person already has the same line
+        (case doesn't count)."""
+        with self._lock:
+            have = self._db.execute("SELECT 1 FROM signoffs WHERE person_id=? AND lower(line)=lower(?)",
+                                    (person_id, line)).fetchone()
+            if have:
+                return 0
+            cur = self._db.execute("INSERT INTO signoffs(person_id, line, emoji, added_at) VALUES(?,?,?,?)",
+                                   (person_id, line, emoji, time.time()))
+            self._db.commit()
+            return int(cur.lastrowid)
+
+    def signoffs(self, person_id: int) -> List[Dict[str, Any]]:
+        """One person's sign-off lines, oldest first (the numbers /friend signoff list shows)."""
+        with self._lock:
+            return [dict(r) for r in self._db.execute(
+                "SELECT * FROM signoffs WHERE person_id=? ORDER BY id", (person_id,))]
+
+    def signoff_remove(self, person_id: int, number: int) -> Optional[Dict[str, Any]]:
+        """Remove line ``number`` (1 = the oldest, as listed); returns it, or None when there's no such number."""
+        rows = self.signoffs(person_id)
+        if not 1 <= number <= len(rows):
+            return None
+        row = rows[number - 1]
+        with self._lock:
+            self._db.execute("DELETE FROM signoffs WHERE id=?", (row["id"],))
+            self._db.commit()
+        return row
 
     def manual(self, group: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._lock:
