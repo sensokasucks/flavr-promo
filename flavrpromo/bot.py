@@ -79,6 +79,7 @@ import asyncio
 import io
 import json
 import logging
+import random
 import re
 import time
 from datetime import datetime
@@ -90,7 +91,7 @@ from discord import app_commands
 from . import focus, sysinfo
 from .calendar import DAY_NAMES, REVIEW_NAMES
 from .config import Settings
-from . import gameinfo, games, host_picker, host_webhooks, hosts, promo, signoff, talent
+from . import gameinfo, games, host_cards, host_picker, host_webhooks, hosts, promo, signoff, talent
 from .pings import KINDS, Pinger, length
 from .share import X_STYLES
 from . import groups
@@ -479,6 +480,44 @@ class PromoBot(discord.Client):
         except discord.HTTPException as e:
             log.info("couldn't edit a go-live card: %s", e)
 
+    async def _recap_png(self, key: str, person: Dict[str, Any], session: Dict[str, Any], said: str,
+                         signoff_text: str) -> Optional[bytes]:
+        """The host's end-of-stream recap picture (flavrpromo/host_cards.py ``recap``, owner 2026-11-21):
+        None when hosts are off for this stream, the setting is off (kv host_recap_card, default on;
+        settings page, Hosts), or there's no Chromium. Uses the calendar's Chromium and picture cache."""
+        cal = self.calendar
+        if not key or self.store.get("host_recap_card") is False or cal is None or getattr(cal, "shooter", None) is None:
+            return None
+        start, end = float(session["started_at"]), float(session["ended_at"])
+        tz = cal.tz
+        a = datetime.fromtimestamp(start, tz)
+        from .render import clock
+        segs = self.store.segments(session["id"]) if session.get("id") else []
+        played = [{"game": x["game"], "tag": games.label(x["tag"]),
+                   "length": hosts.length_words(float(x["ended_at"] or end) - float(x["started_at"]))} for x in segs]
+        try:
+            plats = json.loads(session.get("platforms") or "[]") if isinstance(session.get("platforms"), str) \
+                else list(session.get("platforms") or [])
+        except ValueError:
+            plats = []
+        thumb_url = session.get("vod_thumb") or session.get("thumb") or ""
+        avatar_url = next((x.get("avatar") for x in person.get("accounts") or [] if x.get("avatar")), "")
+        for u in (thumb_url, avatar_url):
+            if u:
+                await cal.images.fetch(u)
+        speak = hosts.speaker(key) + " "
+        r = {"name": person["name"], "title": session.get("title") or "", "length": hosts.length_words(end - start),
+             "length_s": end - start, "when": f"{a:%a} {a:%b} {a.day} · {clock(start, tz)} – {clock(end, tz)}",
+             "played": played, "platforms": plats, "viewers": int(session.get("viewers") or 0),
+             "signoff": signoff_text, "vod": bool(session.get("vod_url")),
+             "thumb": cal.images.data_url(thumb_url), "avatar": cal.images.data_url(avatar_url),
+             "line": said[len(speak):] if said.startswith(speak) else said}
+        try:
+            return await cal.shooter.png(host_cards.recap(key, r, random.random() < 0.5))
+        except Exception as e:
+            log.warning("recap picture failed: %s", e)
+            return None
+
     async def post_end(self, person, session) -> None:
         line = signoff.pick(self.store, person["id"], session.get("id"))
         # the host's closing line; when it reads out the sign-off line, the card doesn't repeat it
@@ -491,6 +530,9 @@ class PromoBot(discord.Client):
                 kw["content"] = said
                 if line is not None and signoff.text(line) in said:
                     line = None
+        # the host's recap picture takes the stream picture's place on the card (sign-off shown on it too)
+        recap = await self._recap_png(key, person, session, kw.get("content") or "",
+                                      signoff.text(line) if line is not None else "") if key else None
         for msg in await self._messages(session):
             e = msg.embeds[0] if msg.embeds else discord.Embed()
             e.title = f"{person['name']} was live"
@@ -510,7 +552,13 @@ class PromoBot(discord.Client):
             if line is not None:
                 # their sign-off line (flavrpromo/signoff.py; one per stream, never the same twice in a row)
                 e.add_field(name="\u200b", value=f"*{signoff.text(line)}*"[:1024], inline=False)
-            await self._edit(msg, embed=e, **kw)
+            mkw = dict(kw)
+            if recap:
+                e.set_image(url="attachment://recap.png")
+                # keep the card's other attachments (the host's face on a bot post), add the picture
+                keep = [x for x in getattr(msg, "attachments", None) or [] if x.filename != "recap.png"]
+                mkw["attachments"] = keep + [discord.File(io.BytesIO(recap), filename="recap.png")]
+            await self._edit(msg, embed=e, **mkw)
 
     # ── commands ───────────────────────────────────────────────────────
     def _register(self) -> None:
