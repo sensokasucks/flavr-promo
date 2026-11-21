@@ -39,7 +39,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from . import groups, host_cards, hosts
+from . import groups, host_cards, hosts, kobold
 
 log = logging.getLogger("flavrpromo.host_picker")
 NUDGE_AFTER = 3600.0            # seconds after the first DM before the one reminder
@@ -281,7 +281,7 @@ def page(store: Any, saved: str = "", ai_on: bool = False) -> str:
                 for c in cands)
             custom = cur if cur and cur not in cands else ""
             opts += (f'<label><input type=radio name="{slot}" value="__custom"{" checked" if custom else ""}> your own: '
-                     f'<input name="{slot}__text" value="{_e(custom)}" maxlength=300></label>')
+                     f'<input name="{slot}__text" value="{_e(custom)}" maxlength={kobold.MAX_CHARS}></label>')
             slots.append(f"<fieldset><legend>{_e(title)}</legend>{opts}</fieldset>")
         q = f"key={quote(k)}&t={int(time.time())}"
         blocks.append(
@@ -339,7 +339,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
             for slot in p.get("candidates") or {}:
                 v = str(form.get(slot) or "")
                 if v == "__custom":
-                    v = " ".join(str(form.get(f"{slot}__text") or "").split())[:300]
+                    v = " ".join(str(form.get(f"{slot}__text") or "").split())[:kobold.MAX_CHARS]
                 if v:
                     picks[slot] = v
             p["picks"] = picks

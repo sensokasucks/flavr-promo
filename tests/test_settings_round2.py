@@ -2,6 +2,8 @@
 flavrpromo/card_page.py), the article editor (/settings/article, article_editor.py) and a form
 for every slash command (/settings/commands, command_forms.py)."""
 
+import asyncio
+
 from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -159,20 +161,28 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             p = await act("reroll:desk_signoff", on_summary="")
             assert p["picks"]["desk_signoff"] and host_picker.chosen(p, "opener") == "Big week, people!"
 
-            class Kob:
-                per_slot = 2
-
-                async def generate(self, text):
-                    self.prompt = text
-                    return '"Fresh line one!", "Fresh line two!"]'
-            poster.kobold = Kob()
+            class Kob(kobold.Kobold):
+                # one request per line: answers "Fresh line one!", "Fresh line two!", ... in turn
+                async def generate(self, text, max_length=200):
+                    self.prompt, self.n = text, getattr(self, "n", 0) + 1
+                    return f'"Fresh line {["one", "two"][(self.n - 1) % 2]}!"]'
+            poster.kobold = Kob(None, "http://pc:5001", per_slot=2)
             p = await act("ask:desk_nudge", on_summary="")
             assert host_picker.chosen(p, "desk_nudge") == "Fresh line one!" and "Fresh line two!" in p["ai"]
             assert host_picker.chosen(p, "opener") == "Big week, people!"           # the others keep their picks
             p = await act(f"ask:{day}", on_summary="", day_look="host")
             assert host_picker.chosen(p, day) == "Fresh line one!" and "this day's picture" in poster.kobold.prompt
+            # the ✨ beside one line rewrites only that line, in its place, and it stays picked
+            i = p["candidates"]["desk_nudge"].index("Fresh line one!")
+            other = list(p["candidates"]["desk_nudge"])
+            poster.kobold.generate = lambda text, max_length=200: asyncio.sleep(0, '"Rewritten, all of it."]')
+            p = await act(f"redo:desk_nudge:{i}", on_summary="", day_look="host")
+            assert p["candidates"]["desk_nudge"][i] == "Rewritten, all of it."
+            assert [x for j, x in enumerate(p["candidates"]["desk_nudge"]) if j != i] == other[:i] + other[i + 1:]
+            assert host_picker.chosen(p, "desk_nudge") == "Rewritten, all of it."
+            assert host_picker.chosen(p, day) == "Fresh line one!"                 # the other slots untouched
             page = await (await c.get("/settings/article?group=flavr&which=week")).text()
-            assert f'value="ask:{day}"' in page and 'value="reroll:opener"' in page
+            assert f'value="ask:{day}"' in page and 'value="reroll:opener"' in page and 'value="redo:desk_nudge:' in page
             poster.kobold = None
             p = await act("save", on_summary="", **{day: "__none"})
             assert host_picker.chosen(p, day) == ""                                  # no bubble

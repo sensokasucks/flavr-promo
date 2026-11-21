@@ -4,7 +4,8 @@ character card editor as well so we can edit what it's sending to kobold").
 
 What KoboldCpp gets for every host line (flavrpromo/kobold.py ``prompt``): the host's character card
 (system prompt, description, personality, scenario, example exchanges, the after-facts rule), then
-the review's facts and one slot's ask ("Write 3 opener lines for the week in review."). This page
+the review's facts and one slot's ask ("Write one opener for the week in review: ..."), sent once
+per line wanted (lines per slot). This page
 edits both:
   Cards   one form per host with each field of kobold.CARD_FIELDS as a text box, prefilled with the
           text in force. Saved in kv "host_cards" ({host: {field: text}}), only the fields that
@@ -50,7 +51,7 @@ def page(poster: Any, saved: str = "") -> str:
             mark = " <i>edited</i>" if (edits.get(key) or {}).get(field) else ""
             rows.append(f'<label><b>{_e(field.replace("_", " "))}</b>{mark}<small>{_e(help_text)}</small>'
                         f'<textarea name="{field}" rows={10 if field == "mes_example" else 4}>{_e(c.get(field))}</textarea></label>')
-        preview = kobold.prompt(key, kobold.fill_ask(kobold.asks()["opener"], kobold.PER_SLOT, "week in review"),
+        preview = kobold.prompt(key, kobold.fill_ask(kobold.asks()["opener"], 1, "week in review"),
                                 kobold.facts_text(SAMPLE))
         try_it = ('<button name=action value=try class=alt>Save and try it (opener lines)</button>'
                   if getattr(poster, "kobold", None) is not None else
@@ -105,12 +106,11 @@ def add_routes(app: web.Application, poster: Any) -> None:
         kobold.load_card_overrides(store)
         note = f"Saved {name}'s card ({len(mine)} field{'' if len(mine) == 1 else 's'} edited)."
         if str(form.get("action")) == "try" and getattr(poster, "kobold", None) is not None:
-            got = await poster.kobold.generate(kobold.prompt(
-                key, kobold.fill_ask(kobold.asks()["opener"], poster.kobold.per_slot, "week in review"),
-                kobold.facts_text(SAMPLE)))
-            lines = kobold.parse(got or "")
+            # three lines, one request each (kobold.Kobold.lines; a request = one complete line)
+            lines = await poster.kobold.lines(key, kobold.asks()["opener"], "week in review", kobold.facts_text(SAMPLE), n=3)
+            raw = poster.kobold.last_raw
             note += ("\n✨ " + "\n✨ ".join(lines)) if lines else \
-                ("\nKoboldCpp couldn't be reached." if got is None else f"\nNo usable lines. KoboldCpp said: {got[:400]}")
+                ("\nKoboldCpp couldn't be reached." if lines is None else f"\nNo usable lines. KoboldCpp said: {raw[:400]}")
         raise _back(note, key)
 
     async def save_asks(request: web.Request) -> web.Response:

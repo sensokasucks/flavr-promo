@@ -208,15 +208,13 @@ def add_routes(app: web.Application, poster: Any) -> None:
                 test = f"✅ KoboldCpp answered: {model}" if model else "❌ No answer from KoboldCpp at that address."
                 if model:
                     # a real request too (example facts, Colette's opener): reaching it isn't enough, the
-                    # answer must be lines this bot can read (kobold.parse); shows the raw answer if not
+                    # answer must be a line this bot can read (kobold.as_line); shows the raw answer if not
                     from .card_page import SAMPLE
                     k = poster.kobold
-                    got = await k.generate(kobold.prompt("colette", kobold.fill_ask(kobold.asks()["opener"], k.per_slot,
-                                                                                    "week in review"), kobold.facts_text(SAMPLE)))
-                    lines = kobold.parse(got or "")
-                    test += ("\n✨ Test lines: " + " / ".join(lines[:3])) if lines else \
-                        ("\n❌ The test request got no answer (timed out?)." if got is None else
-                         f"\n❌ It answered, but not with lines the bot can read: {got[:300]}")
+                    line = await k.line("colette", kobold.asks()["opener"], "week in review", kobold.facts_text(SAMPLE))
+                    test += f"\n✨ Test line: {line}" if line else \
+                        ("\n❌ The test request got no answer (timed out?)." if line is None else
+                         f"\n❌ It answered, but not with a line the bot can read: {k.last_raw[:300]}")
             raise web.HTTPSeeOther(f"/settings?saved=Saved.&test={quote(test)}#kobold")
         raise _back("KoboldCpp settings saved." if url else "KoboldCpp is off (no address).", "kobold")
 
