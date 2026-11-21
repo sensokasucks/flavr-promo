@@ -11,7 +11,10 @@ Polite: one look-up per game, remembered in kv game_info.<name lower case> for K
 not found is asked again after MISS_DAYS). Without Twitch keys, or for non-games (Just Chatting ...),
 nothing is looked up.
 
-Used by: flavrpromo/bot.py (the go-live card's "Playing" line links the game and shows its genres;
+Also guesses the game of a YouTube stream from its title (``guess``, owner 2026-11-21): the title's
+parts are searched on IGDB and a part that is a game's name counts (flavrpromo/games.py).
+
+Used by: flavrpromo/watcher.py (``guess``, through its guess_game hook), flavrpromo/bot.py (the go-live card's "Playing" line links the game and shows its genres;
 the host's new-game line can say the genre), flavrpromo/hosts.py facts (a new game's summary for
 KoboldCpp's review lines, flavrpromo/kobold.py). Made by flavrpromo/__main__.py.
 """
@@ -22,6 +25,7 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
+from . import games
 from .games import NON_GAMES
 
 log = logging.getLogger("flavrpromo.gameinfo")
@@ -29,6 +33,7 @@ log = logging.getLogger("flavrpromo.gameinfo")
 IGDB_URL = "https://api.igdb.com/v4/games"
 KEEP_DAYS = 30              # a found game is looked up again after this long
 MISS_DAYS = 7               # a game IGDB didn't know is asked again after this long
+RETRY_GUESS = 15 * 60.0     # a title whose IGDB guess failed (IGDB unreachable) is tried again after (s)
 SUMMARY_MAX = 200           # characters of the summary kept (a sentence or two)
 
 
@@ -76,6 +81,7 @@ class GameInfo:
     def __init__(self, store: Any, twitch: Any):
         self.store = store
         self.twitch = twitch
+        self._tried: Dict[str, float] = {}         # title guess key → when IGDB last failed on it
 
     async def lookup(self, game: str) -> Dict[str, Any]:
         """``game``'s details, from kv when fresh, else IGDB ({} when unknown or IGDB can't be asked)."""
@@ -104,3 +110,50 @@ class GameInfo:
         row = {**shape(hit), "at": time.time()} if hit else {"at": time.time()}
         self.store.put(_key(game), row)
         return row if row.get("name") else {}
+
+    async def _search(self, text: str, limit: int = 5) -> Optional[list]:
+        """IGDB games for a search (None = IGDB couldn't be asked)."""
+        try:
+            token = await self.twitch._app_token()
+            body = f'search "{text.replace(chr(34), "")}"; fields name,summary,genres.name,url,websites.url; limit {limit};'
+            async with self.twitch.http.post(IGDB_URL, data=body, headers={
+                    "Client-ID": self.twitch.client_id, "Authorization": f"Bearer {token}",
+                    "Accept": "application/json"}) as r:
+                if r.status != 200:
+                    log.info("IGDB answered HTTP %s for %s", r.status, text)
+                    return None
+                got = await r.json(content_type=None)
+                return got if isinstance(got, list) else []
+        except Exception as e:
+            log.info("IGDB search for %s failed: %s", text, e)
+            return None
+
+    async def guess(self, title: str) -> str:
+        """The game a YouTube title names, from IGDB (flavrpromo/games.py ``parts`` / ``names_part``);
+        asked once per title (kv title_guess.<title>, "" = none found; again after MISS_DAYS when IGDB
+        couldn't be reached). Called in the background by flavrpromo/watcher.py; the next watcher
+        round picks the answer up (games.detect_how "igdb"). The found game's details are kept like
+        ``lookup``'s, so the card can show them at once."""
+        if not getattr(self.twitch, "ready", False):
+            return ""
+        key = games.guess_key(title)
+        if time.time() - self._tried.get(key, 0) < RETRY_GUESS:
+            return ""                               # IGDB failed on this title a moment ago
+        row = self.store.get(key) or {}
+        if row and (row.get("game") or time.time() - float(row.get("at") or 0) < MISS_DAYS * 86400):
+            return str(row.get("game") or "")
+        found = ""
+        for part in games.parts(title):
+            results = await self._search(part)
+            if results is None:
+                self._tried[key] = time.time()      # IGDB unreachable: try again after RETRY_GUESS
+                return ""
+            hit = next((r for r in results if games.names_part(str(r.get("name") or ""), part)), None)
+            if hit:
+                found = str(hit["name"]).strip()
+                self.store.put(_key(found), {**shape(hit), "at": time.time()})
+                break
+        self.store.put(key, {"game": found, "at": time.time()})
+        if found:
+            log.info("YouTube title %r: guessed %s from IGDB", title[:80], found)
+        return found

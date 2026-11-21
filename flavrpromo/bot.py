@@ -880,28 +880,43 @@ class PromoBot(discord.Client):
                 bot.calendar.poke()
             await inter.response.send_message(f"{p['name']} is in {groups.name(g)} now.", ephemeral=True)
 
-        @friend.command(name="game", description="Set the game of someone's stream that's on now (YouTube shows none)")
+        @friend.command(name="game", description="Set someone's game now (YouTube shows none); or their own word for a game")
         @app_commands.autocomplete(name=person_auto)
-        @app_commands.describe(game="Like Valheim; remembered, so their next YouTube titles that name it are found")
-        async def friend_game(inter: discord.Interaction, name: str, game: str):
-            # flavrpromo/games.py: a new segment with its history tag, then the live card is edited
+        @app_commands.describe(game="Like Valheim; remembered with the stream's title, so that title means it again",
+                               words="Optional: their own word(s) for this game in titles, like cooking (game - forgets them)")
+        async def friend_game(inter: discord.Interaction, name: str, game: str, words: Optional[str] = None):
+            # flavrpromo/games.py: a new segment with its history tag, then the live card is edited; the
+            # stream's title → game is remembered (kv title_games.<id>), and ``words`` (kv game_words.<id>)
             if not await managers_only(inter):
                 return
             p = bot.store.person(name)
-            s = bot.store.open_session(p["id"]) if p else None
             game = " ".join(game.split())[:100]
-            if not p or not s or not game:
-                await inter.response.send_message(f"{name} isn't live right now." if p else f"No one called {name}.",
-                                                  ephemeral=True)
+            if not p or not game:
+                await inter.response.send_message(f"No one called {name}.", ephemeral=True)
+                return
+            said = []
+            if words:
+                forget = game == "-"
+                kept = games.set_words(bot.store, p["id"], words, "" if forget else game)
+                said.append(("Forgot" if forget else "Noted") + f" “{kept}”" + ("" if forget else f" = {game}")
+                            + f" in {p['name']}'s titles." if kept else "Those words are too short (3+ letters).")
+                if forget:
+                    await inter.response.send_message(" ".join(said), ephemeral=True, allowed_mentions=NO_PINGS)
+                    return
+            s = bot.store.open_session(p["id"])
+            if not s:
+                said.append(f"{p['name']} isn't live right now, so no stream changed.")
+                await inter.response.send_message(" ".join(said), ephemeral=True, allowed_mentions=NO_PINGS)
                 return
             bot.store.update_session(s["id"], game=game)
             games.track(bot.store, s["id"], p["id"], game, time.time())
+            games.remember_fix(bot.store, p["id"], s.get("title") or "", game)
             live_on = bot.watcher.live_on(p)
             if live_on:
                 await bot.post_change(p, {**s, "game": game}, live_on)
             tag = games.now_playing(bot.store, s["id"]).get("tag")
-            await inter.response.send_message(f"{p['name']} is playing {game}" + (f" ({tag})." if tag else "."),
-                                              ephemeral=True, allowed_mentions=NO_PINGS)
+            said.append(f"{p['name']} is playing {game}" + (f" ({tag})." if tag else "."))
+            await inter.response.send_message(" ".join(said), ephemeral=True, allowed_mentions=NO_PINGS)
 
         @friend.command(name="games", description="Someone's games: how many streams each, and when last")
         @app_commands.autocomplete(name=person_auto)
@@ -916,6 +931,10 @@ class PromoBot(discord.Client):
                 return
             lines = [f"**{discord.utils.escape_markdown(r['game'])}**: {r['streams']} stream(s), last <t:{int(r['last'])}:R>"
                      for r in rows]
+            words = bot.store.get(f"game_words.{p['id']}") or {}       # /friend game words: (games.py)
+            if words:
+                lines.append("Their words: " + ", ".join(f"“{w}” = {discord.utils.escape_markdown(g)}"
+                                                         for w, g in sorted(words.items())))
             await inter.response.send_message(f"{p['name']}'s games\n" + "\n".join(lines), ephemeral=True,
                                               allowed_mentions=NO_PINGS)
 

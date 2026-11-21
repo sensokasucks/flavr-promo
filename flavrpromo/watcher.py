@@ -103,6 +103,10 @@ class Watcher:
         self._lock = asyncio.Lock()
         # people whose open session saw no platform live at the last merge (a possible restart)
         self._gone: set[int] = set()
+        # YouTube title → game guesses (flavrpromo/gameinfo.py GameInfo.guess; it remembers its answers
+        # per title, so asking again is cheap); set by flavrpromo/__main__.py when Twitch keys are there
+        self.guess_game: Optional[Callable[[str], Awaitable[str]]] = None
+        self._guessing: set[str] = set()            # titles being guessed right now
 
     # ── checking ───────────────────────────────────────────────────────
     async def resolve_missing(self, platform: str) -> None:
@@ -317,6 +321,22 @@ class Watcher:
                 out[a["platform"]] = {**info, "display": a.get("display") or a["handle"], "avatar": a.get("avatar") or ""}
         return out
 
+    def _guess(self, title: str) -> None:
+        """Ask ``guess_game`` (flavrpromo/gameinfo.py GameInfo.guess, set by flavrpromo/__main__.py; None
+        without Twitch keys) about a YouTube title in the background, once at a time per title."""
+        if self.guess_game is None or not title.strip() or title in self._guessing:
+            return
+        self._guessing.add(title)
+
+        async def run() -> None:
+            try:
+                await self.guess_game(title)
+            except Exception:
+                log.exception("game guess failed")
+            finally:
+                self._guessing.discard(title)
+        asyncio.get_running_loop().create_task(run())
+
     async def reconcile(self) -> None:
         async with self._lock:
             now = self.clock()
@@ -332,9 +352,12 @@ class Watcher:
         if live_on:
             main = main_platform(person, live_on)
             info = live_on[main]
-            # the game: a platform's category, else a known game in the YouTube title (flavrpromo/games.py);
+            # the game: a platform's category, else from the YouTube title (flavrpromo/games.py detect_how);
             # nothing found keeps the one already on (an empty answer never ends a game)
-            game = games.detect(self.store, person, live_on, main) or (open_s or {}).get("game") or ""
+            game, how = games.detect_how(self.store, person, live_on, main, now)
+            if how in ("", "similar"):
+                self._guess(str(info.get("title") or ""))   # IGDB in the background; the next round uses it
+            game = game or (open_s or {}).get("game") or ""
             fields = {"last_seen": now, "platforms": sorted(live_on, key=PLATFORMS.index), "title": info.get("title", ""),
                       "links": {p: i.get("url", "") for p, i in live_on.items()},
                       "url": info.get("url", ""), "thumb": info.get("thumb", ""), "game": game,
