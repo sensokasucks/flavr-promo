@@ -301,8 +301,11 @@ def day_layout(n: int) -> tuple:
     return "slim", (n if n <= SLIM_MAX else SLIM_MAX - 1)
 
 
-def page(week: Week, img: Img, logo: str = "", footer_note: str = "", refresh: int = 0) -> str:
-    """The whole calendar as one HTML document (1600 x 900)."""
+def page(week: Week, img: Img, logo: str = "", footer_note: str = "", refresh: int = 0,
+         extra_css: str = "", extra_head: str = "") -> str:
+    """The whole calendar as one HTML document (1600 x 900). ``extra_css`` / ``extra_head``: a host's
+    look over the plain board (flavrpromo/host_cards.py ``board``: more CSS after this file's, and
+    HTML at the end of the header, e.g. the host's chibi and name)."""
     today = week.today_index()
     cols = ""
     for i, tiles in enumerate(week.days):
@@ -340,9 +343,9 @@ def page(week: Week, img: Img, logo: str = "", footer_note: str = "", refresh: i
                            f"Updated {DAY_NAMES[(updated.weekday() + 1) % 7].title()} {clock(week.now, week.tz)}")
     meta = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ""
     return (f'<!doctype html><html><head><meta charset="utf-8">{meta}<title>{html.escape(week.title.title())}</title>'
-            f'<style>:root{{{theme(week.group)}}}{CSS}</style></head><body>'
+            f'<style>:root{{{theme(week.group)}}}{CSS}{extra_css}</style></head><body>'
             f'<header><h1>{head}</h1><div class="range">{html.escape(week.range_text)} · {html.escape(tz_words(week.tz))}</div>'
-            f'<div class="stats">{stats}</div></header>'
+            f'<div class="stats">{stats}</div>{extra_head}</header>'
             # a review has 4 or 3 day columns instead of 7 (CSS default: 7)
             f'<div class="grid"{"" if len(week.days) == 7 else f" style=grid-template-columns:repeat({len(week.days)},minmax(0,1fr))"}>{cols}</div>'
             f'<footer><span>{html.escape(quiet)}</span><span>{html.escape(foot)}</span></footer></body></html>')

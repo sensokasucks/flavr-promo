@@ -13,7 +13,9 @@ Sections (each its own form; a save redirects back with a note):
   Hosts       on / off and "take turns" or always one host: the same kv as /host setup
               (hosts_on, hosts_only); "post go-live cards as the host" (kv hosts_webhook, default on,
               flavrpromo/host_webhooks.py; needs the bot's Manage Webhooks in the live channels); how
-              long the Sunday board waits for the week-ahead picks (kv host_preview_wait, hours).
+              long the Sunday board waits for the week-ahead picks (kv host_preview_wait, hours); the
+              recap picture on ended go-live cards (kv host_recap_card, default on); boards in the
+              host's look (kv host_board, default on).
   Pictures    every picture kind for both hosts with a preview, upload to replace one (the same
               as /host picture) and "back to built-in" (deletes the upload).
   Lines       every template slot for both hosts as a text box, one line per row; a blank that
@@ -73,7 +75,9 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
     only = str(store.get("hosts_only") or "")
     on = bool(store.get("hosts_on"))
     as_host = store.get("hosts_webhook") is not False      # flavrpromo/host_webhooks.py SETTING, default on
-    wait = host_picker.preview_wait(store)                  # kv host_preview_wait (hours, 0 = for ever)
+    wait = host_picker.preview_wait(store)
+    recap_on = store.get("host_recap_card") is not False   # flavrpromo/bot.py _recap_png, default on
+    board_on = store.get("host_board") is not False        # flavrpromo/calendar_post.py board_host, default on                  # kv host_preview_wait (hours, 0 = for ever)
     # KoboldCpp
     kob = (f'<section id=kobold><h2>✨ KoboldCpp (AI lines)</h2>'
            f'<p class=help>Lines in each host\'s voice on the review picker page. Empty address = template lines only.</p>'
@@ -96,6 +100,10 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
            + f'<label><input type=checkbox name=webhook value=1{" checked" if as_host else ""}> Post go-live cards as '
            f'the host (their name and face; needs the bot\'s Manage Webhooks permission in the live channels, '
            f'otherwise the bot posts them as before)</label>'
+           f'<label><input type=checkbox name=recap value=1{" checked" if recap_on else ""}> Recap picture on ended '
+           f'go-live cards (the host\'s "That\'s a wrap" / stream report card in place of the stream picture)</label>'
+           f'<label><input type=checkbox name=board value=1{" checked" if board_on else ""}> Draw the weekly board and '
+           f'the reviews\' boards in the host\'s look (from the next new week; a review takes its host)</label>'
            f'<label>Sunday board waits <input name=preview_wait type=number min=0 max=48 step=0.5 value="{wait:g}" '
            f'style="width:5em"> hours for the week-ahead picks, then posts without the host <small>(0 = wait for ever)</small></label>'
            + '<p><button>Save</button> <a href="/hosts/pick">Open the line picker</a></p></form></section>')
@@ -207,6 +215,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
         only = str(form.get("only") or "")
         store.put("hosts_only", only if only in hosts.HOSTS else "")
         store.put("hosts_webhook", bool(form.get("webhook")))   # flavrpromo/host_webhooks.py SETTING
+        store.put("host_recap_card", bool(form.get("recap")))   # flavrpromo/bot.py _recap_png
+        store.put("host_board", bool(form.get("board")))        # flavrpromo/calendar_post.py board_host
         try:                                                    # flavrpromo/host_picker.py preview_wait
             store.put("host_preview_wait", min(48.0, max(0.0, float(str(form.get("preview_wait") or host_picker.PREVIEW_WAIT)))))
         except ValueError:
