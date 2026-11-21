@@ -16,7 +16,9 @@ and a stripe is drawn along the seam; the stack's height does not change (the cu
 own bottom, so its content gets a little less room).
   header   a title and a line under it (blank = the article's heading and date range)     title, sub
   host     a host picture on one side, a speech bubble with their line on the other      host, kind, var, side, line
-  stream   one stream: thumbnail, name, game, time, and a line                              ref ("d<day>:<n>"), line
+  stream   one stream: thumbnail, name, game, time, title, a remark, a host picture         ref ("d<day>:<n>"), show, line, host, kind, var
+  game     one game played this week: who played it, how many streams, history tags (new / staple /
+           part 4), genre and what it is (IGDB), a remark                                      game, show, line, host, kind, var
   stats    the review's highlight numbers side by side (hosts.notes of the draft's facts)
   grid     one day's thumbnails (up to 6) under the day's name                              day (0-6)
   hero     a big opening: a small word on top ("Meet"), the host's name huge, their job, a tagline, and
@@ -25,7 +27,11 @@ own bottom, so its content gets a little less room).
                                                                                               lines (one per row), host, other
   quote    one big line of text                                                              text
   footer   a closing strip: the host's small picture and a sign-off line                    host, kind, var, line
-``host`` empty = the draft's host; ``kind`` is a hosts.POOLED picture kind (happy, chibi_happy ...,
+``show`` (stream and game chunks only; owner 2026-11-21 "mix n match the sort of content that goes into
+each segment") lists which parts are drawn, from SHOW; a chunk saved before it existed shows DEFAULT_SHOW.
+The "game" chunks and the stream chunks are what flavrpromo/recipes.py stacks into whole tall sections
+(games this week, one day in detail, one person's week); their remarks come from KoboldCpp
+(recipes.write_line). ``host`` empty = the draft's host; ``kind`` is a hosts.POOLED picture kind (happy, chibi_happy ...,
 so one picture can mix regular and chibi pictures for more emotion); ``var`` pins one picture of
 that kind's pool ("" = the draft's automatic pick, hosts.look). Chunks can be saved by name
 (kv "tall_chunks" {name: chunk}) and whole stacks too (kv "tall_templates" {name: [chunk]}).
@@ -50,6 +56,7 @@ TYPES: Dict[str, Any] = {
     "header": ("Header", (180, 240, 300)),
     "host": ("Host moment", (380, 520, 660)),
     "stream": ("One stream", (200, 250, 310)),
+    "game": ("A game", (200, 250, 320)),
     "stats": ("Highlight numbers", (150, 200, 260)),
     "grid": ("A day's pictures", (400, 540, 700)),
     "quote": ("Big line", (170, 220, 300)),
@@ -57,6 +64,18 @@ TYPES: Dict[str, Any] = {
     "chat": ("Chat bubbles", (300, 420, 560)),
     "footer": ("Sign-off strip", (260, 340, 440)),
 }
+# what a stream / game chunk can show (the builder's tick boxes) and what a new one shows
+SHOW: Dict[str, Dict[str, str]] = {
+    "stream": {"thumb": "Stream picture", "name": "Name", "when": "Day and time", "game": "Game", "title": "Stream title",
+               "line": "Remark", "host": "Host picture"},
+    "game": {"people": "Who played it", "count": "Number of streams", "tags": "History tags (new, part 4 ...)",
+             "genre": "Genre", "about": "What it is (IGDB)", "line": "Remark", "host": "Host picture"},
+}
+DEFAULT_SHOW: Dict[str, Tuple[str, ...]] = {
+    "stream": ("thumb", "name", "when", "game", "title", "line"),
+    "game": ("people", "count", "tags", "genre", "about", "line"),
+}
+TAG_WORDS = {"new": "NEW GAME", "staple": "STAPLE", "back": "BACK AGAIN"}     # "part:4" reads PART 4
 SIDES = {"left": "Host on the left", "right": "Host on the right"}
 CUTS = {"": "Straight edge", "down": "Slants down to the right ↘", "up": "Slants down to the left ↙",
         "v": "V shape ⌄ (dips in the middle)", "peak": "Peak ⌃ (rises in the middle)"}
@@ -94,7 +113,8 @@ def new_chunk(ctype: str, existing: List[Dict[str, Any]], **fields: Any) -> Dict
     base: Dict[str, Any] = {"id": f"c{n}", "type": ctype if ctype in TYPES else "quote", "size": 1, "cut": "", "slope": 1}
     defaults = {"header": {"title": "", "sub": ""},
                 "host": {"host": "", "kind": "happy", "var": "", "side": "left", "line": ""},
-                "stream": {"ref": "", "line": ""}, "stats": {}, "grid": {"day": 0}, "quote": {"text": ""},
+                "stream": {"ref": "", "line": "", "host": "", "kind": "happy", "var": ""},
+                "game": {"game": "", "line": "", "host": "", "kind": "happy", "var": ""}, "stats": {}, "grid": {"day": 0}, "quote": {"text": ""},
                 "footer": {"host": "", "kind": "chibi_happy", "var": "", "line": ""},
                 "hero": {"top": "Meet", "title": "", "sub": "", "tag": "", "host": "", "kind": "happy", "var": ""},
                 "chat": {"lines": "", "host": "", "other": ""}}
@@ -141,6 +161,17 @@ BUILTIN: Dict[str, List[Dict[str, Any]]] = {
 }
 
 
+def shown(c: Dict[str, Any], part: str) -> bool:
+    """Whether a stream / game chunk draws ``part`` (a key of SHOW): its own ``show`` list, else the default."""
+    show = c["show"] if isinstance(c.get("show"), list) else DEFAULT_SHOW.get(c.get("type"), ())
+    return part in show
+
+
+def tag_words(tags: List[str]) -> List[str]:
+    """History tags as the words drawn on a game chunk: ["new", "part:4"] → ["NEW GAME", "PART 4"]."""
+    return [TAG_WORDS.get(t) or t.replace("part:", "PART ").upper() for t in tags or []]
+
+
 def _pic(ctx: Dict[str, Any], key: str, kind: str, var: str) -> str:
     """The data: URL of host ``key``'s picture of ``kind`` (``var`` pins one picture of its pool, else the
     draft's automatic pick), "" when none."""
@@ -161,6 +192,23 @@ def _bubble(text: str, th: Dict[str, str], accent: str, extra: str = "") -> str:
     return (f'<div style="background:{th["paper"]};color:{th["ink"]};border:5px solid {accent};border-radius:30px;'
             f'padding:26px 34px;font-size:32px;line-height:1.32;font-weight:700;box-shadow:0 8px 26px #0007;{extra}">'
             f'{_e(text)}</div>')
+
+
+def _remark(c: Dict[str, Any], th: Dict[str, str], f: float) -> str:
+    """The host's remark under a stream / game chunk (when "line" is ticked and there is one)."""
+    if not (shown(c, "line") and c.get("line")):
+        return ""
+    return (f'<div style="margin-top:{int(12 * f)}px;font-size:{int(26 * f)}px;font-weight:700;color:{th["accent"]}">'
+            f'“{_e(c["line"])}”</div>')
+
+
+def _side_host(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
+    """A host picture at the right end of a stream / game chunk (when "host" is ticked)."""
+    if not shown(c, "host"):
+        return ""
+    pic = _pic(ctx, _host_of(c, ctx), c.get("kind") or "happy", c.get("var") or "")
+    return (f'<img src="{pic}" style="height:{h - 24}px;width:{int((h - 24) * 0.8)}px;flex:none;object-fit:contain;'
+            f'object-position:bottom;align-self:flex-end">' if pic else "")
 
 
 def _tile_of(ref: str, week: Any) -> Tuple[int, Any]:
@@ -229,16 +277,45 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
                                        " · LIVE" if t.kind == "live" else "")
         th_w = int((h - 40) * 16 / 9)
         f = min(1.0, h / 230)                     # a stream chunk with a deep cut has less room: smaller type
-        place = " · ".join(x for x in (week.day_name(day_i), when, t.game) if x)
+        place = " · ".join(x for x in ((week.day_name(day_i), when) if shown(c, "when") else ()) + ((t.game,) if shown(c, "game") else ()) if x)
+        thumb = (f'<div style="width:{th_w}px;height:{h - 40}px;flex:none;border-radius:8px;background:#2a1026 center/cover;{bg}'
+                 f'box-shadow:0 6px 18px #0009"></div>' if shown(c, "thumb") else "")
+        text = ((f'<div style="font-size:{int(44 * f)}px;font-weight:900">{_e(t.name)}</div>' if shown(c, "name") else "")
+                + (f'<div style="font-size:{int(28 * f)}px;color:{th["gold"]};font-weight:700;margin:2px 0 {int(8 * f)}px">'
+                   f'{_e(place)}</div>' if place else "")
+                + (f'<div style="font-size:{int(24 * f)}px;opacity:.85;font-style:italic;white-space:nowrap;overflow:hidden;'
+                   f'text-overflow:ellipsis">{_e(t.title)}</div>' if shown(c, "title") and t.title else "")
+                + _remark(c, th, f))
+        return (f'<div style="{box}display:flex;gap:34px;align-items:center">{thumb}'
+                f'<div style="flex:1;min-width:0">{text}</div>{_side_host(c, ctx, h)}</div>')
+    if kind == "game":
+        g = str(c.get("game") or "")
+        if not g:
+            return (f'<div style="{box}display:flex;align-items:center;font-size:30px;color:{th["gold"]}">'
+                    f'Pick a game from the menu.</div>')
+        row = (ctx.get("games") or {}).get(g.lower()) or {}
+        info = (ctx.get("info") or {}).get(g.lower()) or {}
+        f = min(1.0, h / 230)
+        n = int(row.get("streams") or 0)
+        meta = " · ".join(x for x in (
+            (", ".join(row.get("people") or []) if shown(c, "people") else ""),
+            (f"{n} stream{'' if n == 1 else 's'}" if shown(c, "count") and n else "")) if x)
+        genre = ", ".join(info.get("genres") or [])
+        tags = tag_words(row.get("tags") or []) if shown(c, "tags") else []
+        badge = "".join(f'<div style="background:{th["gold"]};color:{th["ink"]};font-size:{int(26 * f)}px;font-weight:900;'
+                        f'letter-spacing:2px;padding:4px 14px;border-radius:6px;margin:4px 0">{_e(x)}</div>' for x in tags)
+        about = info.get("summary") or ""
+        body = (f'<div style="font-size:{int(46 * f)}px;font-weight:900;line-height:1.1">{_e(g)}</div>'
+                + (f'<div style="font-size:{int(28 * f)}px;color:{th["gold"]};font-weight:700;margin-top:4px">{_e(meta)}</div>' if meta else "")
+                + (f'<div style="font-size:{int(24 * f)}px;color:{th["accent"]};font-weight:800;text-transform:uppercase;'
+                   f'letter-spacing:2px;margin-top:4px">{_e(genre)}</div>' if shown(c, "genre") and genre else "")
+                + (f'<div style="font-size:{int(23 * f)}px;opacity:.85;font-style:italic;margin-top:6px;max-height:{int(62 * f)}px;'
+                   f'overflow:hidden">{_e(about)}</div>' if shown(c, "about") and about else "")
+                + _remark(c, th, f))
         return (f'<div style="{box}display:flex;gap:34px;align-items:center">'
-                f'<div style="width:{th_w}px;height:{h - 40}px;flex:none;border-radius:8px;background:#2a1026 center/cover;{bg}'
-                f'box-shadow:0 6px 18px #0009"></div><div style="flex:1;min-width:0"><div style="font-size:{int(44 * f)}px;'
-                f'font-weight:900">{_e(t.name)}</div><div style="font-size:{int(28 * f)}px;color:{th["gold"]};font-weight:700;'
-                f'margin:2px 0 {int(8 * f)}px">{_e(place)}</div>'
-                f'<div style="font-size:{int(24 * f)}px;opacity:.85;font-style:italic;white-space:nowrap;overflow:hidden;'
-                f'text-overflow:ellipsis">{_e(t.title)}</div>'
-                + (f'<div style="margin-top:{int(12 * f)}px;font-size:{int(26 * f)}px;font-weight:700;color:{th["accent"]}">'
-                   f'“{_e(c["line"])}”</div>' if c.get("line") else "") + '</div></div>')
+                + (f'<div style="width:{int(WIDTH * 0.2)}px;flex:none;display:flex;flex-direction:column;align-items:flex-start;'
+                   f'border-left:10px solid {th["accent"]};padding-left:18px">{badge}</div>' if badge else "")
+                + f'<div style="flex:1;min-width:0">{body}</div>{_side_host(c, ctx, h)}</div>')
     if kind == "stats":
         rows = list(ctx.get("notes") or [])[:4]
         if not rows:
@@ -360,5 +437,5 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
             f'font-family:{th["font"]}}}</style></head><body>{"".join(rows)}{svg}</body></html>')
 
 
-__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CUTS", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
+__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "SHOW", "DEFAULT_SHOW", "shown", "tag_words", "CUTS", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
            "tile_choices"]

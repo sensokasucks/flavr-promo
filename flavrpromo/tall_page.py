@@ -12,6 +12,10 @@ edits it:
   * for each chunk: its size, the shape of its bottom edge (straight or a diagonal cut, gentle to steep,
     with a stripe along the seam), its menus (host, pose or chibi, which pooled picture, side, day, stream,
     a line picked from the article's own lines or typed), ↑ ↓ duplicate remove, "save this chunk as",
+  * stream and game chunks: tick boxes for what they show (tall.SHOW: picture, name, time, genre, host
+    picture ...; "mix n match the content of each segment") and a ✨ that has KoboldCpp write the remark
+    from that stream's / game's facts (flavrpromo/recipes.py); "✨ Write all remarks" does every empty one
+    in the background,
   * add a chunk, insert a saved chunk, start from a built-in or saved stack, save the stack as a
     template, delete saved chunks / stacks.
 Saved chunks: kv "tall_chunks" {name: chunk}; saved stacks: kv "tall_templates" {name: [chunk]}.
@@ -27,7 +31,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from . import article_editor, host_picker, hosts, kobold, tall
+from . import article_editor, host_picker, hosts, kobold, recipes, tall
 from .panel import _e, frame
 
 CHUNKS_KEY, TEMPLATES_KEY = "tall_chunks", "tall_templates"
@@ -95,10 +99,21 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str]) -
                 f'<label>Answers <select name="{cid}__other">{_opts(oopts, c.get("other") or "")}</select></label>'
                 f'<label>Lines, one per row (they take turns)</label>'
                 f'<textarea name="{cid}__lines" rows=5 maxlength=600>{_e(c.get("lines"))}</textarea>')
-    if t == "stream":
-        refs = [("", "(pick a stream)")] + [(x["ref"], x["label"]) for x in tall.tile_choices(week)]
-        return (f'<label>Stream <select name="{cid}__ref">{_opts(refs, c.get("ref") or "")}</select></label>'
-                + _line_field(c, "line", lines, "Remark under it"))
+    if t in ("stream", "game"):
+        if t == "stream":
+            refs = [("", "(pick a stream)")] + [(x["ref"], x["label"]) for x in tall.tile_choices(week)]
+            pick = f'<label>Stream <select name="{cid}__ref">{_opts(refs, c.get("ref") or "")}</select></label>'
+        else:
+            rows = recipes.game_rows(p.get("facts") or {}, week)
+            names = [("", "(pick a game)")] + [(r["game"], r["game"]) for r in rows]
+            pick = f'<label>Game <select name="{cid}__game">{_opts(names, c.get("game") or "")}</select></label>'
+        ticks = "".join(f'<label class=tick><input type=checkbox name="{cid}__show_{k}" value=1'
+                        f'{" checked" if tall.shown(c, k) else ""}> {_e(n)}</label>' for k, n in tall.SHOW[t].items())
+        more = _picture_menus(c, p) if tall.shown(c, "host") else ""
+        return (pick + f'<p class=ticks><input type=hidden name="{cid}__showed" value=1>{ticks}</p>' + more
+                + _line_field(c, "line", lines, "Remark")
+                + f'<p><button name=action value="ai:{cid}" class=alt>✨ Write the remark</button> '
+                f'<small>(KoboldCpp, from this {t}\'s facts; the page waits for it)</small></p>')
     if t == "grid":
         days = [(str(i), week.day_name(i)) for i in range(len(week.days))]
         return f'<label>Day <select name="{cid}__day">{_opts(days, c.get("day") or 0)}</select></label>'
@@ -142,8 +157,13 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
     ins = _opts([(n, n) for n in sorted(saved_chunks)], "")
     stacks = _opts([(f"b:{n}", f"{n} (built-in)") for n in tall.BUILTIN] + [(f"t:{n}", n) for n in sorted(templates)], "")
     dels = _opts([(f"c:{n}", f"chunk: {n}") for n in sorted(saved_chunks)] + [(f"t:{n}", f"stack: {n}") for n in sorted(templates)], "")
+    state = (p["talls"][tid].get("ai_state") or "")
+    ai_tools = ('<p><button name=action value=aiall class=alt>✨ Write all empty remarks</button> '
+                + (f'<small>KoboldCpp: {_e(recipes.AI_STATES.get(state, state))}</small>' if state else
+                   '<small>one request each, in the background; refresh to see them</small>') + '</p>'
+                if any(c["type"] in recipes.LINE_TYPES for c in chunks) else "")
     tools = (
-        f'<section class=tools><p><select name=newtype>{add}</select> <button name=action value=add>+ Add a chunk</button></p>'
+        f'<section class=tools>{ai_tools}<p><select name=newtype>{add}</select> <button name=action value=add>+ Add a chunk</button></p>'
         + (f'<p><select name=insert>{ins}</select> <button name=action value=insert class=alt>Insert my saved chunk</button></p>'
            if saved_chunks else "")
         + f'<p><select name=stack>{stacks}</select> <button name=action value=load class=alt>Start from this stack</button> '
@@ -158,13 +178,17 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
             f'<input type=hidden name=t value="{_e(tid)}">'
             f'<p><button name=action value=save>Save and preview</button></p>'
             f'<div class=prev><img src="/settings/tall/picture?d={quote(dkey)}&t={tid}&v={int(p.get("saved_at") or 0)}" '
-            f'alt="preview" loading=lazy></div>{"".join(blocks)}{tools}</form>')
+            f'alt="preview" loading=lazy></div>{"".join(blocks)}{tools}</form>'
+            # ✨ on one chunk waits for KoboldCpp: show it's working instead of a page that looks stuck
+            "<script>document.querySelector('form').addEventListener('submit',e=>{const b=e.submitter;"
+            "if(b&&/^ai:/.test(b.value)){b.textContent='✨ writing… (up to a minute)';"
+            "setTimeout(()=>document.querySelectorAll('button').forEach(x=>x.disabled=true),0)}});</script>")
     style = (".meter{height:14px;background:#0e0f14;border-radius:8px;overflow:hidden}.meter div{height:100%;background:#2ae0d4}"
              ".meter.over div{background:#e5312f}.bad{color:#ff7a7a;font-weight:bold}"
              ".prev img{max-width:520px;width:100%;border-radius:8px;border:2px solid #3d2a3b;display:block;margin:10px 0}"
              ".chunk{border:1px solid #3d2a3b;border-radius:10px;padding:8px 14px;margin:10px 0}"
              ".chunk .head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}"
-             ".chunk label{display:inline-block;margin:6px 10px 6px 0}.chunk textarea{display:block}"
+             ".chunk label{display:inline-block;margin:6px 10px 6px 0}.ticks label.tick{margin:2px 14px 2px 0;font-size:15px}.chunk textarea{display:block}"
              ".chunk input:not([type]){width:min(480px,90%)}.tools p{margin:8px 0}"
              "@media(min-width:1100px){.prev{position:sticky;top:8px;float:right;margin-left:20px;width:380px}"
              "form .chunk,form .tools{margin-right:410px}}")
@@ -207,6 +231,18 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
             c["side"] = get("side")
     if t == "stream" and get("ref") is not None:
         c["ref"] = get("ref") if get("ref") in {x["ref"] for x in tall.tile_choices(week)} else ""
+    if t == "game" and get("game") is not None:
+        c["game"] = get("game") if get("game") in {r["game"] for r in recipes.game_rows(p.get("facts") or {}, week)} else ""
+    if t in recipes.LINE_TYPES:
+        if get("showed"):                       # the tick boxes were on the page (a partial post leaves them be)
+            c["show"] = [k for k in tall.SHOW[t] if get(f"show_{k}")]
+        if get("host") is not None:
+            c["host"] = get("host") if get("host") in hosts.HOSTS else ""
+        if get("kind") in hosts.POOLED:
+            c["kind"] = get("kind")
+        key = c.get("host") if c.get("host") in hosts.HOSTS else p["host"]
+        if get("var") is not None:
+            c["var"] = get("var") if get("var") in [v for v, _ in hosts.variants(key, c.get("kind") or "happy")] else ""
     if t == "grid" and str(get("day") or "").isdigit():
         c["day"] = max(0, min(len(week.days) - 1, int(get("day"))))
     for field in ("line", "text"):
@@ -298,6 +334,18 @@ def add_routes(app: web.Application, poster: Any) -> None:
                 note = f"Started from “{name}”."
             else:
                 note = "Pick a stack first."
+        elif verb == "ai" and i >= 0:           # ✨ one chunk's remark (the page waits for one request)
+            line, note = await recipes.write_line(poster, p, week, chunks[i])
+            if line:
+                chunks[i]["line"] = line
+            anchor = cid
+        elif verb == "aiall":
+            store.put(dkey, p)                  # the posted menus first, then the writer re-reads the draft
+            note = ("KoboldCpp is writing the empty remarks; refresh in a minute or two."
+                    if recipes.start_lines(poster, dkey, tid, week) else
+                    "KoboldCpp isn't set up." if getattr(poster, "kobold", None) is None else
+                    "KoboldCpp is still writing; refresh in a minute.")
+            raise _back(dkey, tid, note)
         elif verb == "delsaved":
             kind, _, name = str(form.get("delwhat") or "").partition(":")
             if kind == "c" and mine.pop(name, None) is not None:
@@ -322,7 +370,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         chunks = p["talls"][tid]["chunks"]
         ctx = {"host": p["host"], "week": week, "img": poster.images.data_url, "facts": f, "notes": p.get("notes"),
                "heading": host_picker.heading_of(p, "Week in Review"), "range": f.get("range") or "",
-               "seed": p.get("seed"), "pins": p.get("pins")}
+               "seed": p.get("seed"), "pins": p.get("pins"), **recipes.drawing_context(store, p, week, chunks)}
         png = await poster.shooter.png(tall.document(chunks, ctx), size=(tall.WIDTH, max(1, tall.total(chunks))))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
 
