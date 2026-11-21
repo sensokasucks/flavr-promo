@@ -91,18 +91,39 @@ def ics(weeks: List[Week], now: float) -> str:
     return "\r\n".join(out) + "\r\n"
 
 
+async def get_week(poster: CalendarPoster, group: str, label: str = "", off: int = 0) -> Week:
+    """A group's week (off -1 / 0 / 1) or review (label week / weekend). A past week or a review is
+    filled in from the platforms first (once). Called by the routes below and flavrpromo/article_editor.py."""
+    if label:
+        await poster.backfill_review(label)
+        return poster.build_review(group, label)
+    if off < 0:
+        await poster.ensure_backfill(poster.week_of(off))     # last week: fill in from the platforms once
+    return poster.build(group, poster.week_of(off), recap=off < 0)
+
+
+def article_query(group: str, label: str = "", off: int = 0) -> str:
+    """The ?group=&review= / ?group=&week= part of the article and picture addresses."""
+    q = f"?group={group}"
+    if label:
+        return q + f"&review={label}"
+    return q + ({1: "&week=next", -1: "&week=last"}.get(off, ""))
+
+
+def build_article(poster: CalendarPoster, week: Week, q: str) -> dict:
+    """share.article for a week with the owner's settings (X handles, hashtag line, tagging) and one
+    picture per day (/calendar/day.png + ``q``). Called by the article page and the article editor."""
+    people = poster.store.people(week.group)
+    save = lambda day: f"/calendar/day.png{q}{'&' if q else '?'}day={day}"  # noqa: E731
+    return article(week, {p["id"]: p.get("x_handle") or "" for p in people},
+                   tags=str(poster.store.get("share_x_tags") or ""), tag_people=bool(poster.store.get("share_x_tag")),
+                   channels={p["id"]: channel_url(p) for p in people}, save=save)
+
+
 def add_routes(app: web.Application, poster: CalendarPoster) -> None:
     async def _week(request: web.Request):
-        """The week (or review) a request asks for: ?group= ?week= ?review=. A past week or a review
-        is filled in from the platforms first (once)."""
-        label = _review(request)
-        if label:
-            await poster.backfill_review(label)
-            return poster.build_review(_group(request), label)
-        off = _offset(request)
-        if off < 0:
-            await poster.ensure_backfill(poster.week_of(off))     # last week: fill in from the platforms once
-        return poster.build(_group(request), poster.week_of(off), recap=off < 0)
+        """The week (or review) a request asks for: ?group= ?week= ?review=."""
+        return await get_week(poster, _group(request), _review(request), _offset(request))
 
     async def board(request: web.Request) -> web.Response:
         week = await _week(request)
@@ -134,13 +155,7 @@ def add_routes(app: web.Application, poster: CalendarPoster) -> None:
 
     async def _article(request: web.Request) -> dict:
         """share.article for ?group= ?week=, with one picture per day (/calendar/day.png)."""
-        week = await _week(request)
-        people = poster.store.people(week.group)
-        q = _query(request)
-        save = lambda day: f"/calendar/day.png{q}{'&' if q else '?'}day={day}"  # noqa: E731
-        return article(week, {p["id"]: p.get("x_handle") or "" for p in people},
-                       tags=str(poster.store.get("share_x_tags") or ""), tag_people=bool(poster.store.get("share_x_tag")),
-                       channels={p["id"]: channel_url(p) for p in people}, save=save)
+        return build_article(poster, await _week(request), _query(request))
 
     async def article_page(request: web.Request) -> web.Response:
         a = await _article(request)
@@ -196,8 +211,9 @@ def add_routes(app: web.Application, poster: CalendarPoster) -> None:
     app.router.add_get("/calendar/day.png", day_picture)
 
 
-def article_html(a: dict, png_url: str, zip_url: str = "", cover_url: str = "") -> str:
-    """The copy page around share.article's text. Copying uses a selection + execCommand("copy"):
+def article_html(a: dict, png_url: str, zip_url: str = "", cover_url: str = "", top: str = "") -> str:
+    """The copy page around share.article's text (also the article editor's finished article, with
+    ``top``: a line of HTML above the title, its "back to the editor" link). Copying uses a selection + execCommand("copy"):
     the newer clipboard API only works on https or localhost, and this page is plain http on the home
     network. Copying a selection keeps it as rich text, which is what X's Article editor wants. The
     "Picture N · Save" lines (class nocopy) are taken out of the copy."""
@@ -215,7 +231,7 @@ button.alt,a.btn.alt{{background:#2a2d3a}}
 .box img{{width:100%;border-radius:8px;display:block}} .box p{{margin:6px 0}}
 .box .nocopy{{font-size:13px;color:#667;margin:8px 0 10px}} .box .nocopy p{{margin-top:4px}}
 .tip{{color:#aab;font-size:14px}} #done{{color:#b7ef33;font-weight:600}} img{{max-width:100%;border-radius:10px}}
-</style></head><body><main>
+</style></head><body><main>{top}
 <p class="tip">On X: Write → <b>Article</b>. Put the cover picture in the box at the top, copy the title into the
 title box, then copy the article into the body.</p>
 <div id="title">{t}</div>
@@ -238,4 +254,4 @@ document.getElementById('done').textContent=ok?'Copied ✓':'Select it and press
 </script></body></html>"""
 
 
-__all__ = ["add_routes", "ics", "article_html", "Tile"]
+__all__ = ["add_routes", "ics", "article_html", "get_week", "build_article", "article_query", "Tile"]

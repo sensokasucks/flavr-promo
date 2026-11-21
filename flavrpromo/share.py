@@ -373,7 +373,9 @@ def article(week: Week, handles: Dict[int, str] | None = None, tags: str = "", t
     pictures from the home network) with a Save link, to upload with X's picture button. "" or no
     ``save`` = no picture block. ``text`` is plain text (fallback, tests). Titles are allowed (an
     Article has room) with every @ defused; names become real @tags only with tag_people
-    (/setup share-style), the same rule as x_posts."""
+    (/setup share-style), the same rule as x_posts. ``sections``: the same body cut into
+    [{"id", "title", "html"}] (ids summary, who, day0-day6, empty, uploads, tags) for the article
+    editor (flavrpromo/article_editor.py); joined with "\n" they are ``html``."""
     handles = (handles or {}) if tag_people else {}
     channels = channels or {}
     e = html.escape
@@ -382,7 +384,9 @@ def article(week: Week, handles: Dict[int, str] | None = None, tags: str = "", t
         summary = f"{week.stream_count} streams · {week.hours_live:.0f} hours live · times in {_tz_name(week)}"
     else:
         summary = f"Times in {_tz_name(week)} · {sum(len(d) for d in week.days)} streams so far"
-    parts = [f"<p>{e(summary)}</p>"]
+    # the body in sections (the article editor, flavrpromo/article_editor.py, shows and orders them
+    # one by one): (id, title, [html parts]); ``html`` joins every part with "\n"
+    secs: List[Any] = [("summary", "Summary line", [f"<p>{e(summary)}</p>"])]
     text = [title, summary]
     pictures: List[Any] = []
     if week.recap and week.tiles():
@@ -392,7 +396,7 @@ def article(week: Week, handles: Dict[int, str] | None = None, tags: str = "", t
             line = f"{_who(r['tile'], handles)} · {r['streams']} stream{'s' if r['streams'] != 1 else ''} · {hours}"
             rows.append(f"<li><b>{e(_who(r['tile'], handles))}</b> · {e(line.split(' · ', 1)[1])}</li>")
             text.append("• " + line)
-        parts += ["<h2>Who streamed</h2>", "<ul>" + "".join(rows) + "</ul>"]
+        secs.append(("who", "Who streamed", ["<h2>Who streamed</h2>", "<ul>" + "".join(rows) + "</ul>"]))
         text.insert(2, "Who streamed")
     for i, tiles in enumerate(week.days):
         if not tiles:
@@ -429,9 +433,9 @@ def article(week: Week, handles: Dict[int, str] | None = None, tags: str = "", t
             pics = [f'<div class="nocopy"><img src="{e(local, quote=True)}" alt="{e(head)}">'
                     f'<p>Picture {n} · <a href="{e(local, quote=True)}" download="{name}">Save</a> · '
                     "put it here with X's picture button</p></div>"]
-        parts += [f"<h2>{e(head)}</h2>"] + pics + ["<ul>" + "".join(rows) + "</ul>"]
+        secs.append((f"day{i}", head, [f"<h2>{e(head)}</h2>"] + pics + ["<ul>" + "".join(rows) + "</ul>"]))
     if not week.tiles():
-        parts.append(f"<p>{'No streams this week.' if week.recap else 'Nothing scheduled yet.'}</p>")
+        secs.append(("empty", "Nothing on", [f"<p>{'No streams this week.' if week.recap else 'Nothing scheduled yet.'}</p>"]))
     ups = _uploads(week)
     if ups:
         # a review's uploads after the days: "Short · name" on top, the title as the link under it
@@ -446,11 +450,13 @@ def article(week: Week, handles: Dict[int, str] | None = None, tags: str = "", t
             rows.append(f"<li>{top}<br>{under}</li>")
             text.append(f"• {day:%a} {day:%b} {day.day} · {no_tags(u['name'])} · {kind}\n  {name}"
                         + (f" {u['url']}" if u.get("url") else ""))
-        parts += [f"<h2>{e(UPLOADS_HEAD)}</h2>", "<ul>" + "".join(rows) + "</ul>"]
+        secs.append(("uploads", UPLOADS_HEAD, [f"<h2>{e(UPLOADS_HEAD)}</h2>", "<ul>" + "".join(rows) + "</ul>"]))
     if tags.strip():
-        parts.append(f"<p>{e(tags.strip())}</p>")
+        secs.append(("tags", "Hashtag line", [f"<p>{e(tags.strip())}</p>"]))
         text.append(tags.strip())
-    return {"title": title, "html": "\n".join(parts), "text": "\n".join(text), "pictures": pictures}
+    sections = [{"id": i, "title": t, "html": "\n".join(ps)} for i, t, ps in secs]
+    return {"title": title, "html": "\n".join(x["html"] for x in sections), "text": "\n".join(text),
+            "pictures": pictures, "sections": sections}
 
 
 __all__ = ["discord_parts", "discord_text", "x_posts", "x_len", "X_STYLES", "channel_url", "article"]

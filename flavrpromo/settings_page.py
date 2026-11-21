@@ -2,6 +2,10 @@
 The settings page: http://<this PC>:3871/settings (owner 2026-11-21: "a local web page to set that
 kobold URL and maybe other tweaks that'd be troublesome to do over Discord commands").
 
+The other settings pages share its look and top links (``frame``, PAGES): character cards
+(flavrpromo/card_page.py), the article editor (article_editor.py) and the command forms
+(command_forms.py).
+
 Sections (each its own form; a save redirects back with a note):
   KoboldCpp   address, password (never shown back), creativity (temperature) and lines per slot,
               a Test button that asks KoboldCpp for its model. Saved in kv "kobold"; it wins over
@@ -27,7 +31,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from . import hosts
+from . import hosts, kobold
 from .kobold import PER_SLOT, Kobold
 
 log = logging.getLogger("flavrpromo.settings_page")
@@ -47,12 +51,14 @@ def kobold_settings(poster: Any) -> Dict[str, Any]:
 
 
 def apply(poster: Any) -> None:
-    """Make poster.kobold match the settings (None = off) and load the edited host lines."""
+    """Make poster.kobold match the settings (None = off) and load the edited host lines, character
+    cards and slot asks (flavrpromo/card_page.py)."""
     k = kobold_settings(poster)
     http = getattr(poster, "http", None)
     poster.kobold = Kobold(http, k["url"], k["key"], float(k["temperature"]), int(k["per_slot"])) \
         if k["url"] and http is not None else None
     hosts.load_overrides(poster.store)
+    kobold.load_card_overrides(poster.store)
 
 
 def _back(note: str, anchor: str = "") -> web.HTTPSeeOther:
@@ -118,22 +124,38 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
              f'(reviews: you pick on the picker page). Blanks in braces are filled in; a line whose blank has no '
              f'value is skipped. Allowed blanks: {_e(" ".join("{" + b + "}" for b in hosts.BLANKS))}. An empty box '
              f'uses the built-in lines.</p>{"".join(blocks)}</section>')
-    note = f'<p class=saved>{_e(saved)}</p>' if saved else ""
-    nav = ('<nav><a href="#kobold">KoboldCpp</a> · <a href="#hosts">Hosts</a> · <a href="#pictures">Pictures</a> · '
+    nav = ('<nav class=in><a href="#kobold">KoboldCpp</a> · <a href="#hosts">Hosts</a> · <a href="#pictures">Pictures</a> · '
            '<a href="#lines">Lines</a></nav>')
+    return frame("FlaVR Promo settings", "⚙️ Settings", nav + kob + hst + pics + lines, saved)
+
+
+# the pages that share this look (the top links; keep in step with each page's add_routes)
+PAGES = (("/settings", "⚙️ Settings"), ("/settings/cards", "🧾 Character cards"),
+         ("/settings/article", "📰 Article editor"), ("/settings/commands", "⌨️ Commands"),
+         ("/hosts/pick", "🎙️ Line picker"))
+STYLE = ("body{font-family:sans-serif;background:#1b1018;color:#eee;"
+         "max-width:1100px;margin:auto;padding:16px}a{color:#2ae0d4}section{border-bottom:2px solid #444;padding:10px 0 20px}"
+         "label{display:block;margin:8px 0}input:not([type=checkbox]):not([type=radio]):not([type=file]),select{width:min(420px,90%)}"
+         "input[type=number]{width:90px!important}button{padding:7px 12px;border-radius:8px;border:0;font-weight:bold;"
+         "background:#f72ca2;color:#fff;cursor:pointer}button.alt{background:#3a2d3a}.help,small{color:#aab;display:block}"
+         ".saved,.test{background:#2ae0d4;color:#000;padding:8px;border-radius:8px;white-space:pre-wrap}"
+         ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}"
+         ".pic{background:#2a1a28;border-radius:10px;padding:10px}.pic img,.pic .none{width:100%;height:150px;"
+         "object-fit:contain;background:#0e0f14;border-radius:8px;display:flex;align-items:center;justify-content:center}"
+         ".pic b{display:block;margin-top:6px}.pic input[type=file]{width:100%;margin:6px 0}"
+         "textarea{width:100%;font-size:14px;background:#0e0f14;color:#eee;border:1px solid #555;border-radius:6px}"
+         "nav.top{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px}nav.top b{color:#f72ca2}"
+         "pre{white-space:pre-wrap;background:#0e0f14;padding:10px;border-radius:8px;font-size:13px}")
+
+
+def frame(title: str, heading: str, body: str, saved: str = "", style: str = "") -> str:
+    """A whole page in the settings look with the links to the other pages (PAGES) on top. Used by
+    this page, flavrpromo/card_page.py, article_editor.py and command_forms.py. ``style``: extra CSS."""
+    links = " ".join(f"<b>{_e(n)}</b>" if n == heading else f'<a href="{u}">{_e(n)}</a>' for u, n in PAGES)
+    note = f'<p class=saved>{_e(saved)}</p>' if saved else ""
     return ("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width'>"
-            "<title>FlaVR Promo settings</title><style>body{font-family:sans-serif;background:#1b1018;color:#eee;"
-            "max-width:1100px;margin:auto;padding:16px}a{color:#2ae0d4}section{border-bottom:2px solid #444;padding:10px 0 20px}"
-            "label{display:block;margin:8px 0}input:not([type=checkbox]):not([type=radio]):not([type=file]){width:min(420px,90%)}"
-            "input[type=number]{width:90px!important}button{padding:7px 12px;border-radius:8px;border:0;font-weight:bold;"
-            "background:#f72ca2;color:#fff}.help,small{color:#aab;display:block}.saved,.test{background:#2ae0d4;color:#000;"
-            "padding:8px;border-radius:8px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}"
-            ".pic{background:#2a1a28;border-radius:10px;padding:10px}.pic img,.pic .none{width:100%;height:150px;"
-            "object-fit:contain;background:#0e0f14;border-radius:8px;display:flex;align-items:center;justify-content:center}"
-            ".pic b{display:block;margin-top:6px}.pic input[type=file]{width:100%;margin:6px 0}"
-            ".slot textarea{width:100%;font-size:14px;background:#0e0f14;color:#eee;border:1px solid #555;border-radius:6px}"
-            "</style></head><body>"
-            f"<h1>⚙️ FlaVR Promo settings</h1>{nav}{note}{kob}{hst}{pics}{lines}</body></html>")
+            f"<title>{_e(title)}</title><style>{STYLE}{style}</style></head><body>"
+            f"<nav class=top>{links}</nav><h1>{_e(heading)}</h1>{note}{body}</body></html>")
 
 
 def add_routes(app: web.Application, poster: Any) -> None:
