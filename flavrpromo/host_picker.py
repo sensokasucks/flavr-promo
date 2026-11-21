@@ -40,6 +40,7 @@ from urllib.parse import quote
 from aiohttp import web
 
 from . import groups, host_cards, hosts, kobold
+from .panel import frame
 
 log = logging.getLogger("flavrpromo.host_picker")
 NUDGE_AFTER = 3600.0            # seconds after the first DM before the one reminder
@@ -300,16 +301,11 @@ def page(store: Any, saved: str = "", ai_on: bool = False) -> str:
             + ("" if preview else f'<img src="/hosts/preview.png?{q}&card=desk" alt="desk preview">')
             + '</div></section>')
     body = "".join(blocks) or "<p>Nothing is waiting for picks right now.</p>"
-    note = f'<p class=saved>{_e(saved)}</p>' if saved else ""
-    return ("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width'>"
-            "<title>Host line picker</title><style>body{font-family:sans-serif;background:#1b1018;color:#eee;"
-            "max-width:1100px;margin:auto;padding:16px}fieldset{border:1px solid #555;margin:10px 0;border-radius:8px}"
-            "label{display:block;margin:6px 0}input[type=text],input:not([type]){width:60%}"
-            "button{padding:8px 14px;border-radius:8px;border:0;font-weight:bold}.go{background:#f72ca2;color:#fff}"
-            ".ai{color:#b7ef33}.prev img{width:100%;margin-top:10px;border-radius:8px}.saved{background:#2ae0d4;color:#000;padding:8px;"
-            "border-radius:8px}section{border-bottom:2px solid #444;padding-bottom:20px}</style></head><body>"
-            f"<h1>🎙️ Host line picker</h1><p><a style=color:#2ae0d4 href=/settings>Settings</a> (KoboldCpp, "
-            f"hosts, pictures, lines)</p>{note}{body}</body></html>")
+    # drawn in the panel (flavrpromo/panel.py, Articles > Line picker) with a few styles of its own
+    return frame("Host line picker", "🎙️ Line picker", body, saved, style=(
+        "fieldset{border:1px solid #555;margin:10px 0;border-radius:8px}"
+        "input[type=text],input:not([type]){width:60%}.go{background:#2ae0d4!important;color:#000!important}"
+        ".ai{color:#b7ef33}.prev img{width:100%;margin-top:10px;border-radius:8px}"))
 
 
 def add_routes(app: web.Application, poster: Any) -> None:

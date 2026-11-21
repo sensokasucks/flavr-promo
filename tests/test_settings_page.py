@@ -59,8 +59,10 @@ async def test_hosts_switches_and_pictures(tmp_path):
             assert store.get("hosts_on") and store.get("hosts_only") == "clark"
             await c.post("/settings/hosts", data={"only": "nobody"}, allow_redirects=False)
             assert not store.get("hosts_on") and store.get("hosts_only") == ""
-            page = await (await c.get("/settings")).text()
+            page = await (await c.get("/settings/pictures")).text()
             assert "/settings/picture/colette/chibi_desk" in page                  # built-in pictures shown
+            assert "FlaVR Promo</h2>" in page and 'class=on' in page               # drawn in the panel (flavrpromo/panel.py)
+            assert "/settings/lines" in page and "<b>🖼️ Pictures</b>" in page     # its tab row
             assert (await c.get("/settings/picture/clark/head")).status == 200
             form = aiohttp.FormData()
             form.add_field("host", "clark")
@@ -92,3 +94,42 @@ async def test_edited_lines():
         assert hosts.templates("clark", "live_end") == hosts.TEMPLATES["clark"]["live_end"]   # untouched slot
         await c.post("/settings/lines", data={"host": "clark", "action": "reset"}, allow_redirects=False)
         assert hosts.templates("clark", "live_start") == hosts.TEMPLATES["clark"]["live_start"]
+
+
+async def test_picture_pool_upload_remove_and_pick(tmp_path):
+    # extra pictures per kind: add several at once, thumbnails serve, remove one; the pick follows pins / seed
+    store = Store(":memory:")
+    poster = Poster(store)
+    hosts.init(tmp_path, defaults=False)
+    (tmp_path / "colette").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "colette" / "happy.png").write_bytes(b"main")
+    try:
+        async with await _client(poster) as c:
+            form = aiohttp.FormData()
+            form.add_field("host", "colette")
+            form.add_field("kind", "happy")
+            form.add_field("action", "add")
+            form.add_field("file", b"one", filename="a.png", content_type="image/png")
+            form.add_field("file", b"two", filename="b.webp", content_type="image/webp")
+            form.add_field("file", b"bad", filename="c.gif", content_type="image/gif")
+            r = await c.post("/settings/pool", data=form, allow_redirects=False)
+            assert "Added%202%20pictures" in r.headers["Location"] and "c.gif" in r.headers["Location"]
+            assert [v for v, _ in hosts.variants("colette", "happy")] == ["main", "1", "2"]
+            assert await (await c.get("/settings/picture/colette/happy?v=2")).read() == b"two"
+            assert (await c.get("/settings/picture/colette/happy?v=9")).status == 404
+            assert "/settings/picture/colette/happy?v=1" in await (await c.get("/settings/pictures")).text()
+            # a pin wins; the same seed always gives the same picture; no context = random from the pool
+            with hosts.look(1, {"happy": "2"}):
+                assert hosts.picture("colette", "happy").read_bytes() == b"two"
+            with hosts.look(7):
+                first = hosts.picture("colette", "happy")
+                assert all(hosts.picture("colette", "happy") == first for _ in range(5))
+            assert {hosts.picture("colette", "happy").read_bytes() for _ in range(60)} == {b"main", b"one", b"two"}
+            assert hosts.picture("colette", "head") is None and hosts.add_to_pool("colette", "head", b"x", "h.png")
+            await c.post("/settings/pool", data={"host": "colette", "kind": "happy", "vid": "1", "action": "remove"})
+            assert [v for v, _ in hosts.variants("colette", "happy")] == ["main", "2"]
+            # numbers are never reused: the next upload is 3
+            assert hosts.add_to_pool("colette", "happy", b"three", "d.png") == ""
+            assert [v for v, _ in hosts.variants("colette", "happy")] == ["main", "2", "3"]
+    finally:
+        hosts.init(None)
