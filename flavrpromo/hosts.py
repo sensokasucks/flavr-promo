@@ -56,6 +56,7 @@ MAX_PICTURE = 8 * 1024 * 1024       # bytes; one uploaded picture
 LONG_STREAM = 4 * 3600.0            # a stream this long gets the "long stream" end line (s)
 BUSY_STREAMS, BUSY_HOURS = 8, 20    # a review this full is "busy" (happy pose, busy opener)
 QUIET_STREAMS = 2                   # this few streams or fewer is "quiet" (sleepy pose)
+GAMES_MAX = 8                       # games listed in a review's facts (KoboldCpp context), most streams first
 BUSY_PLANNED = 6                    # a Sunday preview with this many planned streams is "busy"
 
 _folder: Optional[Path] = None      # DATA_DIR/hosts (set by flavrpromo/__main__.py; None in tests = no pictures)
@@ -458,14 +459,26 @@ def facts(store: Store, week: Any) -> Dict[str, Any]:
         out["quiet_day"] = week.date_of(empty[0]).strftime("%A")
     if week.quiet:
         out["quiet_name"] = week.quiet[0]
-    # a game someone streamed for the first time in these days (flavrpromo/games.py tags)
+    # a game someone streamed for the first time in these days (flavrpromo/games.py tags), and every
+    # game played (owner 2026-11-21: KoboldCpp should know them): {game, people, streams, tags}
     a, b = week.start.timestamp(), week.end.timestamp()
+    played: Dict[str, Dict[str, Any]] = {}
     for t in done:
         sid = _session_id(store, t)
-        for seg in store.segments(sid) if sid else []:
+        segs = store.segments(sid) if sid else []
+        for seg in segs:
             if seg["tag"] == "new" and a <= float(seg["started_at"]) < b:
                 out.setdefault("new_game", seg["game"])
                 out.setdefault("new_game_name", t.name)
+        for g, tg in ([(x["game"], x["tag"]) for x in segs] or ([(t.game, "")] if t.game else [])):
+            row = played.setdefault(g.lower(), {"game": g, "people": [], "streams": 0, "tags": []})
+            row["streams"] += 1
+            if t.name not in row["people"]:
+                row["people"].append(t.name)
+            if tg and tg not in row["tags"]:
+                row["tags"].append(tg)
+    if played:
+        out["games"] = sorted(played.values(), key=lambda r: -r["streams"])[:GAMES_MAX]
     if out.get("new_game"):                         # what it is, for KoboldCpp's lines (flavrpromo/gameinfo.py)
         info = gameinfo.cached(store, out["new_game"])
         about = "; ".join(x for x in (", ".join(info.get("genres") or []), info.get("summary") or "") if x)
@@ -552,6 +565,16 @@ def preview_facts(week: Any) -> Dict[str, Any]:
         out["first_time"] = _clock(first.at, week.tz)
     if names and names.most_common(1)[0][1] > 1:
         out["most_name"], out["most_count"] = names.most_common(1)[0]
+    # the games on the schedule when the platform said (Twitch schedules carry a category)
+    planned: Dict[str, Dict[str, Any]] = {}
+    for t in tiles:
+        if t.game:
+            row = planned.setdefault(t.game.lower(), {"game": t.game, "people": [], "streams": 0, "tags": []})
+            row["streams"] += 1
+            if t.name not in row["people"]:
+                row["people"].append(t.name)
+    if planned:
+        out["games"] = sorted(planned.values(), key=lambda r: -r["streams"])[:GAMES_MAX]
     return out
 
 

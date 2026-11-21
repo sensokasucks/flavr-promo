@@ -139,7 +139,9 @@ def _day_lines(p: Dict[str, Any], week: Any, only: str = "") -> None:
         facts = {"when": f"{date:%A}", "when_lower": f"on {date:%A}", "count": len(tiles),
                  "first_name": first.name, "first_time": clock(first.at, week.tz)}
         p.setdefault("day_facts", {})[str(i)] = facts
-        names = ", ".join(dict.fromkeys(t.name for t in sorted(tiles, key=lambda t: t.at)))
+        # who, with the game when known ("Lulu: Valheim"), for KoboldCpp's day lines (owner 2026-11-21)
+        names = ", ".join(dict.fromkeys(f"{t.name}: {t.game}" if t.game else t.name
+                                        for t in sorted(tiles, key=lambda t: t.at)))
         p.setdefault("day_text", {})[str(i)] = (f"{date:%A}: {len(tiles)} stream{'' if len(tiles) == 1 else 's'} "
                                                 f"({names}), {first.name} first at {facts['first_time']}.")
         slot = f"day{i}"

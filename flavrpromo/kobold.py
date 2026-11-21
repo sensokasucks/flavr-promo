@@ -100,6 +100,21 @@ def load_card_overrides(store: Any) -> None:
     _ask_edits.update({k: str(v) for k, v in (store.get("kobold_asks") or {}).items() if k in ASKS})
 
 
+def games_text(rows: List[Dict[str, Any]], planned: bool = False) -> str:
+    """hosts.facts / preview_facts "games" as one clause: "games played: Valheim (Lulu, Sen; 3 streams;
+    part 4), Schedule I (Sen; new game)". Tags read as words (flavrpromo/games.py)."""
+    words = {"new": "new game", "staple": "a channel staple", "back": "back after a while"}
+    out = []
+    for r in rows or []:
+        tags = [words.get(t, t.replace("part:", "part ")) for t in r.get("tags") or []]
+        bits = [", ".join(r.get("people") or [])]
+        if int(r.get("streams") or 0) > 1:
+            bits.append(f"{r['streams']} streams")
+        bits += tags
+        out.append(f"{r['game']} ({'; '.join(b for b in bits if b)})")
+    return ("games planned: " if planned else "games played: ") + ", ".join(out) if out else ""
+
+
 def facts_text(f: Dict[str, Any]) -> str:
     """A review's facts (flavrpromo/hosts.py ``facts``) as the plain sentence the card's examples use.
     The Sunday preview's facts (hosts.preview_facts, ``preview`` True) read as the week ahead."""
@@ -111,6 +126,8 @@ def facts_text(f: Dict[str, Any]) -> str:
             parts.append(f"busiest day {f['busy_day']} with {f['busy_count']} streams")
         if f.get("most_name"):
             parts.append(f"{f['most_name']} has {f['most_count']} streams planned")
+        if f.get("games"):
+            parts.append(games_text(f["games"], planned=True))
         return ", ".join(parts) + "."
     parts = [f"{f.get('streams', 0)} streams", f"{f.get('hours', 0)} hours"]
     if f.get("top_name") and int(f.get("top_count") or 0) > 1:
@@ -124,6 +141,8 @@ def facts_text(f: Dict[str, Any]) -> str:
         parts.append(f"{f['quiet_day']} had no streams")
     if f.get("quiet_name"):
         parts.append(f"{f['quiet_name']} didn't stream")
+    if f.get("games"):
+        parts.append(games_text(f["games"]))
     return ", ".join(parts) + "."
 
 
