@@ -114,6 +114,7 @@ async def main() -> int:
         server.extra_routes.append(lambda app: command_forms.add_routes(app, poster))
         # game genres / summary / store link from IGDB with the Twitch keys (flavrpromo/gameinfo.py)
         bot.game_info = GameInfo(store, checkers["twitch"])
+        watcher.guess_game = bot.game_info.guess     # YouTube titles → game (games.py detect_how "igdb")
         server.extra_routes.append(lambda app: host_picker.add_routes(app, poster))
 
         # go-live posts first, then a nudge so the calendar redraws within seconds
