@@ -57,7 +57,7 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
     width = 1540 - left
     rows = list(zip(notes, comments + [""] * len(notes)))
     if key == "clark":
-        img = f'<img src="{pic}" style="position:absolute;left:60px;top:170px;height:690px;max-width:400px;object-fit:contain">' if pic else ""
+        img = f'<img src="{pic}" style="position:absolute;left:60px;top:170px;height:690px;max-width:400px;object-fit:contain;object-position:bottom">' if pic else ""
         table = "".join(
             f'<tr style="border-bottom:1px solid #d8c3a3"><td style="padding:9px 0;color:#8a5a33">{_e(n["label"].title())}</td>'
             f'<td style="text-align:right"><b>{_e(n["value"])}</b>{(" · <i>" + _e(c) + "</i>") if c else ""}</td></tr>'
@@ -76,7 +76,7 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
                  f'The full board follows. — C.</div></div>')
         return _doc("background:linear-gradient(135deg,#1c130d,#3a2416 70%,#4a2a14);color:#f3e6d3", inner)
     # Colette
-    img = f'<img src="{pic}" style="position:absolute;left:40px;top:160px;height:700px;max-width:420px;object-fit:contain">' if pic else ""
+    img = f'<img src="{pic}" style="position:absolute;left:40px;top:160px;height:700px;max-width:420px;object-fit:contain;object-position:bottom">' if pic else ""
     step = (width - 20) // 3
     stickies = "".join(
         f'<div class=note style="left:{left + 10 + i * step}px;top:{480 + (i % 2) * 30}px;transform:rotate({NOTE_TILT[i]});'
@@ -93,9 +93,10 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
     return _doc("background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a);color:#fff", inner)
 
 
-def desk(key: str, highlight: str, nudge: str, signoff: str) -> str:
+def desk(key: str, highlight: str, nudge: str, signoff: str, kind: str = "desk") -> str:
     """The closing desk card."""
-    pic = hosts.data_url(key, "desk")
+    # ``kind``: "desk" or "chibi_desk" (picked on the picker page, flavrpromo/host_picker.py)
+    pic = hosts.data_url(key, kind) or hosts.data_url(key, "desk")
     if key == "clark":
         left = 700 if pic else 60
         img = f'<img src="{pic}" style="position:absolute;left:0;top:0;width:700px;height:900px;object-fit:cover">' if pic else ""

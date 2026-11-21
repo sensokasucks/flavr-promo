@@ -1100,7 +1100,9 @@ class PromoBot(discord.Client):
                          ("head", "Head (small face on go-live cards)"),
                          ("chibi_happy", "Chibi: happy (opener corner, day posts, face)"),
                          ("chibi_pointing", "Chibi: pointing (a new game)"),
-                         ("chibi_sleepy", "Chibi: sleepy (quiet weeks)")]]
+                         ("chibi_sleepy", "Chibi: sleepy (quiet weeks)"),
+                         ("chibi_desk", "Chibi: desk (the sign-off card's other look)"),
+                         ("chibi_head", "Chibi: head (go-live face when there's no head)")]]
 
         @host_cmd.command(name="picture", description="Upload a host's picture (a pose, their desk, their head or a chibi)")
         @app_commands.choices(host=host_choices, kind=kind_choices)
@@ -1124,7 +1126,8 @@ class PromoBot(discord.Client):
             for k, h in hosts.HOSTS.items():
                 have = hosts.pictures(k)
                 lines.append(f"{h['emoji']} **{h['name']}** ({h['role']}): "
-                             + " · ".join(f"{kind} {'✅' if ok else '—'}" for kind, ok in have.items()))
+                             + " · ".join(f"{kind} {'✅ yours' if has == 'yours' else '✅' if has else '—'}"
+                                          for kind, has in have.items()))
             waiting = host_picker.waiting(bot.store)
             if waiting and bot.calendar:
                 lines.append(f"{len(waiting)} review(s) waiting for your picks: {host_picker.link(bot.calendar)}")

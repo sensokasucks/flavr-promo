@@ -100,14 +100,14 @@ def test_cards_escape_text():
 
 
 def test_save_picture(tmp_path):
-    hosts.init(tmp_path)
+    hosts.init(tmp_path, defaults=False)
     try:
         assert hosts.save_picture("colette", "head", b"PNG", "face.txt") == "Send a PNG, JPG or WebP picture."
         assert hosts.save_picture("nobody", "head", b"PNG", "a.png") == "Unknown host or picture kind."
         assert hosts.save_picture("colette", "happy", b"PNG1", "a.png") == ""
         assert hosts.save_picture("colette", "happy", b"JPG", "a.jpeg") == ""     # replaces the PNG
         assert sorted(x.name for x in (tmp_path / "colette").iterdir()) == ["happy.jpg"]
-        assert hosts.pictures("colette")["happy"] and not hosts.pictures("colette")["sleepy"]
+        assert hosts.pictures("colette")["happy"] == "yours" and not hosts.pictures("colette")["sleepy"]
         assert hosts.picture("colette", "sleepy").name == "happy.jpg"             # a pose falls back
         assert hosts.picture("colette", "desk") is None
         assert hosts.data_url("colette", "happy").startswith("data:image/jpeg;base64,")
@@ -242,7 +242,7 @@ async def test_live_card_host_lines(monkeypatch):
 
 
 def test_chibis_fall_back_and_make_the_face(tmp_path):
-    hosts.init(tmp_path)
+    hosts.init(tmp_path, defaults=False)
     try:
         assert hosts.face("clark") is None
         assert hosts.save_picture("clark", "chibi_sleepy", b"PNG", "c.png") == ""
@@ -293,3 +293,19 @@ async def test_day_post_has_the_host(tmp_path):
     sent = [s for s in d.sent if s[0] == "77"]
     assert len(sent) == 1 and sent[0][3].startswith("🍎 **Clark:**") and "Lulu" in sent[0][3]
     assert store.get("day_post.flavr.today")["host"]["key"] == "clark"
+
+
+def test_built_in_pictures(tmp_path):
+    # the owner's art ships in flavrpromo/host_art (all ten kinds for both hosts); an upload wins
+    hosts.init(tmp_path)
+    try:
+        for key in hosts.HOSTS:
+            assert set(hosts.pictures(key).values()) == {"built-in"}, key
+            assert hosts.face(key).name == "head.webp"
+        assert hosts.save_picture("clark", "head", b"PNG", "h.png") == ""
+        assert hosts.face("clark") == tmp_path / "clark" / "head.png"
+        assert hosts.pictures("clark")["head"] == "yours"
+        page = host_cards.desk("colette", "hi", "", "bye", "chibi_desk")
+        assert "data:image/webp;base64," in page
+    finally:
+        hosts.init(None)

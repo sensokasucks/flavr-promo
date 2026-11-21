@@ -7,11 +7,13 @@ This file holds who the hosts are, their pictures, which one presents a post, an
   * HOSTS: name, job, emoji and colours. Colette (Marketing) is loud, upbeat and caffeinated, with
     FlaVR colours and sticky notes. Clark (Division Clerk) is calm and dry, a filed report on
     cream paper. Card layouts are in flavrpromo/host_cards.py.
-  * Pictures are the owner's own art, so they are NOT in git: DATA_DIR/hosts/<host>/<kind>.png
-    (or .jpg / .webp), uploaded from Discord with /host picture. Kinds: happy, pointing, sleepy
+  * Pictures: the owner's art is built in (flavrpromo/host_art, transparent WebP); uploads from
+    Discord with /host picture go to DATA_DIR/hosts/<host>/<kind>.png (or .jpg / .webp) and win. Kinds: happy, pointing, sleepy
     (poses for the opener), desk (the sign-off card), head (the small face on go-live cards) and
     chibi_happy / chibi_pointing / chibi_sleepy (chibi versions: peeking over the opener card, the
-    go-live face when there's no head, and on day posts). A missing pose falls back to another pose,
+    go-live face when there's no head, and on day posts), chibi_desk (the desk card's other look,
+    picked on the picker page) and chibi_head. Built-in defaults of all ten (the owner's art) are in
+    flavrpromo/host_art; an upload replaces one. A missing pose falls back to another pose,
     a missing chibi to another chibi; no pictures at all still works (text only).
   * Which host: random per post, but never the same one three times in a row (kv host_last), or
     always one when the owner picks it (/host setup only:). Off until /host setup on (kv hosts_on),
@@ -43,7 +45,8 @@ HOSTS: Dict[str, Dict[str, str]] = {
     "colette": {"name": "Colette Cappuccino", "role": "Marketing", "emoji": "☕", "accent": "#f72ca2"},
     "clark": {"name": "Clark", "role": "Division Clerk", "emoji": "🍎", "accent": "#e0782e"},
 }
-KINDS = ("happy", "pointing", "sleepy", "desk", "head", "chibi_happy", "chibi_pointing", "chibi_sleepy")
+KINDS = ("happy", "pointing", "sleepy", "desk", "head", "chibi_happy", "chibi_pointing", "chibi_sleepy",
+         "chibi_desk", "chibi_head")
 POSES = ("happy", "pointing", "sleepy")
 CHIBIS = ("chibi_happy", "chibi_pointing", "chibi_sleepy")     # the same three moods, small (Sen 2026-11-21)
 EXTS = (".png", ".jpg", ".jpeg", ".webp")
@@ -53,11 +56,16 @@ BUSY_STREAMS, BUSY_HOURS = 8, 20    # a review this full is "busy" (happy pose, 
 QUIET_STREAMS = 2                   # this few streams or fewer is "quiet" (sleepy pose)
 
 _folder: Optional[Path] = None      # DATA_DIR/hosts (set by flavrpromo/__main__.py; None in tests = no pictures)
+# the built-in pictures (owner's art, 2026-11-21, transparent WebP, flavrpromo/host_art/<host>/<kind>.webp);
+# an upload of the same kind in DATA_DIR/hosts wins. Off until init (tests see no pictures).
+DEFAULTS = Path(__file__).resolve().parent / "host_art"
+_defaults = False
 
 
-def init(folder: Optional[Path]) -> None:
-    global _folder
+def init(folder: Optional[Path], defaults: bool = True) -> None:
+    global _folder, _defaults
     _folder = Path(folder) if folder else None
+    _defaults = defaults
 
 
 # ── switches and choosing ──────────────────────────────────────────────
@@ -83,20 +91,22 @@ def choose(store: Store, rng: Optional[random.Random] = None) -> str:
 # ── pictures ───────────────────────────────────────────────────────────
 def picture(key: str, kind: str) -> Optional[Path]:
     """The picture file, or None. A missing pose falls back to another pose."""
-    if _folder is None or key not in HOSTS:
+    if key not in HOSTS:
         return None
+    folders = [f for f in (_folder, DEFAULTS if _defaults else None) if f is not None]
     family = POSES if kind in POSES else CHIBIS if kind in CHIBIS else ()
-    for k in [kind] + [p for p in family if p != kind]:
-        for ext in EXTS:
-            p = _folder / key / f"{k}{ext}"
-            if p.is_file():
-                return p
+    for k in [kind] + [p for p in family if p != kind]:      # the exact kind first (yours, then built-in)
+        for folder in folders:
+            for ext in EXTS:
+                p = folder / key / f"{k}{ext}"
+                if p.is_file():
+                    return p
     return None
 
 
 def face(key: str) -> Optional[Path]:
-    """The small face on go-live cards: the head picture, else a chibi."""
-    return picture(key, "head") or picture(key, "chibi_happy")
+    """The small face on go-live cards: the head picture, else the chibi head, else a chibi."""
+    return picture(key, "head") or picture(key, "chibi_head") or picture(key, "chibi_happy")
 
 
 def data_url(key: str, kind: str) -> str:
@@ -127,17 +137,18 @@ def save_picture(key: str, kind: str, data: bytes, filename: str) -> str:
     return ""
 
 
-def pictures(key: str) -> Dict[str, bool]:
-    """/host list: which kinds this host has (exact files, no fallback)."""
+def pictures(key: str) -> Dict[str, str]:
+    """/host list: for each kind "yours" (uploaded), "built-in" or "" (exact files, no fallback)."""
     out = {}
     for kind in KINDS:
-        out[kind] = _folder is not None and any((_folder / key / f"{kind}{e}").is_file() for e in EXTS)
+        has = lambda folder: folder is not None and any((folder / key / f"{kind}{e}").is_file() for e in EXTS)  # noqa: E731
+        out[kind] = "yours" if has(_folder) else "built-in" if _defaults and has(DEFAULTS) else ""
     return out
 
 
 # ── lines ──────────────────────────────────────────────────────────────
 # Blanks: {name} {game} {tag} {length} {signoff} {streams} {hours} {top_name} {top_count}
-# {longest_name} {longest_len} {quiet_day} {quiet_name} {new_game} {new_game_name} {other}
+# {longest_name} {longest_len} {quiet_day} {quiet_name} {new_game} {new_game_name} {other} {streams_text} ("1 stream")
 # day posts: {when} ("Today", "This weekend") {when_lower} {count} {first_name} {first_time}
 TEMPLATES: Dict[str, Dict[str, List[str]]] = {
     "colette": {
@@ -157,8 +168,8 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
         "open_normal": ["Hi hi hi! {streams} streams and {hours} hours this time. Let's look!",
                         "Recap time!! {streams} streams, {hours} hours, and {longest_name} went longest!",
                         "Coffee in hand, recap ready! {streams} streams to go through!"],
-        "open_quiet": ["A cozy one: {streams} stream(s). Quality over quantity, right?",
-                       "Quiet stretch, team! {streams} stream(s). Recharge mode activated. ☕"],
+        "open_quiet": ["A cozy one: {streams_text}. Quality over quantity, right?",
+                       "Quiet stretch, team! {streams_text}. Recharge mode activated. ☕"],
         "open_empty": ["Nobody streamed?! I'm making a LOT of coffee for next time.",
                        "Zero streams this time. Everyone's resting, and so am I. ☕"],
         "note_longest": ["approved for the highlight reel", "absolute marathon!", "someone get them a snack"],
@@ -193,8 +204,8 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
         "open_normal": ["Good day. {streams} streams, {hours} hours, all in order.",
                         "The report is ready: {streams} streams. {longest_name} went longest, at {longest_len}.",
                         "{streams} streams filed this period. Details below."],
-        "open_quiet": ["A quiet period: {streams} stream(s). Nothing to worry about. Status: restful.",
-                       "{streams} stream(s) on file. Quiet, but in order."],
+        "open_quiet": ["A quiet period: {streams_text}. Nothing to worry about. Status: restful.",
+                       "{streams_text} on file. Quiet, but in order."],
         "open_empty": ["No streams on file this time. The cider is still warm.",
                        "Nothing filed this period. Everyone is resting. Noted."],
         "note_longest": ["thoroughly documented", "a long file", "commendable stamina"],
@@ -210,7 +221,7 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
         "day_one": ["{when}: {first_name} at {first_time}. Noted.", "One stream on file {when_lower}: {first_name}, {first_time}."],
         "day_many": ["{when}: {count} streams on file. {first_name} opens at {first_time}.",
                      "{count} streams scheduled {when_lower}. All in order.",
-                     "The {when_lower} schedule: {count} streams. I've put the cider on."],
+                     "{when}'s schedule: {count} streams. I've put the cider on."],
     },
 }
 
@@ -289,7 +300,8 @@ def facts(store: Store, week: Any) -> Dict[str, Any]:
     """The numbers a review's lines and cards use, from a review ``Week`` (flavrpromo/calendar.py)."""
     done = [t for t in week.tiles() if t.kind == "past"]
     counts = Counter(t.name for t in done)
-    out: Dict[str, Any] = {"streams": len(done), "hours": int(round(week.hours_live)), "range": week.range_text}
+    out: Dict[str, Any] = {"streams": len(done), "hours": int(round(week.hours_live)), "range": week.range_text,
+                           "streams_text": f"{len(done)} stream{'' if len(done) == 1 else 's'}"}
     if counts:
         out["top_name"], out["top_count"] = counts.most_common(1)[0]
     if done:

@@ -56,7 +56,7 @@ def make(store: Any, group: str, label: str, week: Any, start_iso: str, host: st
     f = hosts.facts(store, week)
     return {"group": group, "label": label, "start": start_iso, "host": key, "facts": f,
             "notes": hosts.notes(f), "candidates": hosts.review_candidates(key, f), "picks": {},
-            "ready": False, "asked_at": time.time(), "nudged": False}
+            "ready": False, "asked_at": time.time(), "nudged": False, "desk_kind": "desk"}
 
 
 async def ready(poster: Any, group: str, label: str, start_iso: str) -> Optional[Dict[str, Any]]:
@@ -111,7 +111,8 @@ def card_html(p: Dict[str, Any], card: str) -> str:
         return host_cards.opener(key, HEADINGS.get(p["label"], "In Review"), str(f.get("range") or ""),
                                  chosen(p, "opener"), notes, [chosen(p, f"note{i}") for i in range(len(notes))],
                                  hosts.pose(f))
-    return host_cards.desk(key, chosen(p, "desk_highlight"), chosen(p, "desk_nudge"), chosen(p, "desk_signoff"))
+    return host_cards.desk(key, chosen(p, "desk_highlight"), chosen(p, "desk_nudge"), chosen(p, "desk_signoff"),
+                           p.get("desk_kind") or "desk")
 
 
 async def post_card(poster: Any, channel: str, p: Dict[str, Any], card: str) -> None:
@@ -167,6 +168,11 @@ def page(store: Any, saved: str = "") -> str:
             f'<form method=post><input type=hidden name=key value="{_e(k)}">'
             f'<p>Host: <b>{_e(h["emoji"])} {_e(h["name"])}</b> <button name=action value=swap>Swap host</button></p>'
             f'{"".join(slots)}'
+            # the desk card's picture: the regular desk or the chibi desk (hosts.py kinds desk / chibi_desk)
+            f'<fieldset><legend>desk picture</legend>'
+            + "".join(f'<label><input type=radio name=desk_kind value={v}{" checked" if p.get("desk_kind", "desk") == v else ""}>'
+                      f' {n}</label>' for v, n in (("desk", "regular"), ("chibi_desk", "chibi")))
+            + '</fieldset>'
             f'<p><button name=action value=save>Save and preview</button> '
             f'<button name=action value=post class=go>Post it</button></p></form>'
             f'<div class=prev><img src="/hosts/preview.png?{q}&card=opener" alt="opener preview">'
@@ -211,6 +217,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
                 if v:
                     picks[slot] = v
             p["picks"] = picks
+            if str(form.get("desk_kind") or "") in ("desk", "chibi_desk"):
+                p["desk_kind"] = str(form.get("desk_kind"))
             msg = "Saved."
             if action == "post":
                 p["ready"] = True
