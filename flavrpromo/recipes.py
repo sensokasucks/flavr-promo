@@ -245,6 +245,23 @@ def build(recipe: str, p: Dict[str, Any], week: Any, arg: str = "", diagonal: bo
     return _pictures(title, [sub], items, diagonal), ""
 
 
+def fill(chunks: List[Dict[str, Any]], p: Dict[str, Any], week: Any) -> None:
+    """Put this week into a template's empty chunks (a saved or built-in stack just added): each stream
+    chunk without a stream takes the next stream of the calendar not used yet in the stack, each game
+    chunk without a game the next game. Chunks already pointing at something are left alone."""
+    refs = [x["ref"] for x in tall.tile_choices(week)]
+    names = [r["game"] for r in game_rows(p.get("facts") or {}, week)]
+    used_r = {c.get("ref") for c in chunks if c.get("type") == "stream" and c.get("ref")}
+    used_g = {c.get("game") for c in chunks if c.get("type") == "game" and c.get("game")}
+    for c in chunks:
+        if c.get("type") == "stream" and not c.get("ref"):
+            c["ref"] = next((r for r in refs if r not in used_r), "")
+            used_r.add(c["ref"])
+        elif c.get("type") == "game" and not c.get("game"):
+            c["game"] = next((g for g in names if g not in used_g), "")
+            used_g.add(c["game"])
+
+
 def people(week: Any) -> List[str]:
     """Everyone with a stream this week, in calendar order (the "one person's week" menu)."""
     seen: List[str] = []
@@ -270,5 +287,5 @@ def add_to_draft(p: Dict[str, Any], built: List[Tuple[str, List[Dict[str, Any]]]
     return ids
 
 
-__all__ = ["RECIPES", "build", "people", "add_to_draft", "write_line", "start_lines", "game_rows", "drawing_context",
+__all__ = ["RECIPES", "build", "fill", "people", "add_to_draft", "write_line", "start_lines", "game_rows", "drawing_context",
            "chunk_facts", "stream_facts", "game_facts", "AI_STATES", "LINE_TYPES", "next_tall_id"]

@@ -156,3 +156,46 @@ async def test_recipes_build_sections_and_kobold_writes_remarks_from_the_facts(t
             assert poster.shooter.sizes[-1][1] == tall.total(ch)
     finally:
         hosts.init(None)
+
+
+async def test_a_saved_stack_is_reused_with_this_weeks_streams(tmp_path):
+    """Save a stack in the builder → the layout is kept, the week's streams and remarks are dropped; adding it
+    from the editor's menu fills the empty stream and game chunks from the calendar."""
+    hosts.init(tmp_path / "pics")
+    poster = _poster(tmp_path)
+    poster.store.put("hosts_only", "colette")
+    try:
+        async with _client(poster, article_editor.add_routes, tall_page.add_routes) as c:
+            await c.get("/settings/article?group=flavr&which=week")
+            dkey = article_editor.draft_key("flavr", "week")
+
+            async def edit(action, **extra):
+                p = poster.store.get(dkey)
+                data = {"d": dkey, "action": action, **{f"on_{s['id']}": "1" for s in p["sections"]}, **extra}
+                assert (await c.post("/settings/article", data=data, allow_redirects=False)).status == 303
+                return poster.store.get(dkey)
+
+            week, _ = await article_editor._article(poster, poster.store.get(dkey))
+            day = next(i for i, d in enumerate(week.days) if d)
+            p = await edit("add_recipe", recipe="day", recipe_day=str(day), recipe_seams="diagonal")
+            chunks = p["talls"]["tall1"]["chunks"]
+            chunks[1].update(line="Remark for this week.", show=["name", "host"])
+            poster.store.put(dkey, p)
+            r = await c.post("/settings/tall", data={"d": dkey, "t": "tall1", "action": "savetpl", "tplname": "My day",
+                                   "c1__title": chunks[0]["title"], "c1__sub": "x"},
+                             allow_redirects=False)
+            assert r.status == 303
+            saved = poster.store.get(tall.TEMPLATES_KEY)["My day"]
+            assert saved[1]["ref"] == "" and saved[1]["line"] == "" and saved[1]["show"] == ["name", "host"]
+            assert saved[0]["cut"] == "down" and saved[0]["title"] == chunks[0]["title"]
+            page = await (await c.get("/settings/article?group=flavr&which=week")).text()
+            assert "My day" in page and "Add it" in page
+            p = await edit("add_tall", tall_stack="t:My day")
+            new = p["talls"]["tall2"]["chunks"]
+            assert new[1]["ref"] == f"d{day}:0" and new[1]["line"] == "" and new[1]["show"] == ["name", "host"]
+            assert [s["title"] for s in p["sections"] if s["id"] == "tall2"] == ["My day"]
+            # a built-in stack still works from the same menu
+            p = await edit("add_tall", tall_stack="b:Hero and chat (diagonal)")
+            assert p["talls"]["tall3"]["chunks"][0]["type"] == "hero"
+    finally:
+        hosts.init(None)

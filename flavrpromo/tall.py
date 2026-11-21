@@ -49,6 +49,8 @@ from typing import Any, Dict, List, Tuple
 from . import hosts
 from .render import clock, hm, logo_data_url
 
+CHUNKS_KEY, TEMPLATES_KEY = "tall_chunks", "tall_templates"   # kv: saved chunks {name: chunk}, saved stacks {name: [chunk]}
+WEEK_FIELDS = ("ref", "game", "line", "lines")   # what belongs to one week: a stack saved as a template drops these
 WIDTH = 1600
 MAX_H = 2133                         # px: the tallest picture X shows whole (3:4 at this width)
 # type → (label, heights small / medium / large in px)
@@ -128,6 +130,18 @@ def renumber(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out = copy.deepcopy(chunks)
     for i, c in enumerate(out, 1):
         c["id"] = f"c{i}"
+    return out
+
+
+def strip(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A stack as a reusable template (owner 2026-11-21): the layout (types, sizes, cuts, show boxes, hosts,
+    poses, headers, big lines) kept, what belongs to one week (the chosen stream or game, the remarks, the
+    chat lines) emptied. recipes.fill puts this week's streams and games in when it is used."""
+    out = renumber(chunks)
+    for c in out:
+        for k in WEEK_FIELDS:
+            if k in c:
+                c[k] = ""
     return out
 
 
@@ -437,5 +451,5 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
             f'font-family:{th["font"]}}}</style></head><body>{"".join(rows)}{svg}</body></html>')
 
 
-__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "SHOW", "DEFAULT_SHOW", "shown", "tag_words", "CUTS", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
+__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "tag_words", "CUTS", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
            "tile_choices"]

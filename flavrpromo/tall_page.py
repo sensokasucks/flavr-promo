@@ -17,7 +17,7 @@ edits it:
     from that stream's / game's facts (flavrpromo/recipes.py); "✨ Write all remarks" does every empty one
     in the background,
   * add a chunk, insert a saved chunk, start from a built-in or saved stack, save the stack as a
-    template, delete saved chunks / stacks.
+    template (the layout; this week's streams, games and remarks are dropped and refilled when it's used), delete saved chunks / stacks.
 Saved chunks: kv "tall_chunks" {name: chunk}; saved stacks: kv "tall_templates" {name: [chunk]}.
 No password, like the rest of port 3871 (home network only).
 """
@@ -34,7 +34,7 @@ from aiohttp import web
 from . import article_editor, host_picker, hosts, kobold, recipes, tall
 from .panel import _e, frame
 
-CHUNKS_KEY, TEMPLATES_KEY = "tall_chunks", "tall_templates"
+CHUNKS_KEY, TEMPLATES_KEY = tall.CHUNKS_KEY, tall.TEMPLATES_KEY
 NAME_MAX = 40
 
 
@@ -321,7 +321,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         elif verb == "savetpl":
             name = _name(form.get("tplname"))
             if name:
-                stacks[name] = tall.renumber(chunks)
+                stacks[name] = tall.strip(chunks)       # the layout, not this week's streams
                 store.put(TEMPLATES_KEY, stacks)
                 note = f"Saved the stack as “{name}”."
             else:
@@ -331,6 +331,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
             src = tall.BUILTIN.get(name) if kind == "b" else stacks.get(name) if kind == "t" else None
             if src:
                 p["talls"][tid]["chunks"] = tall.renumber(src)
+                recipes.fill(p["talls"][tid]["chunks"], p, week)      # this week's streams / games go in
                 note = f"Started from “{name}”."
             else:
                 note = "Pick a stack first."
