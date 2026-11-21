@@ -9,7 +9,8 @@ sits in the article. The editor's "+ Add a tall picture" makes one from a built-
 edits it:
   * a height meter (the picture is at most tall.MAX_H = 2133 px tall on X; more is cropped from the middle),
   * a preview (/settings/tall/picture, drawn with Chromium like the other card pictures),
-  * for each chunk: its size, its menus (host, pose or chibi, which pooled picture, side, day, stream,
+  * for each chunk: its size, the shape of its bottom edge (straight or a diagonal cut, gentle to steep,
+    with a stripe along the seam), its menus (host, pose or chibi, which pooled picture, side, day, stream,
     a line picked from the article's own lines or typed), ↑ ↓ duplicate remove, "save this chunk as",
   * add a chunk, insert a saved chunk, start from a built-in or saved stack, save the stack as a
     template, delete saved chunks / stacks.
@@ -118,7 +119,11 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
             f'<button name=action value="dup:{cid}" class=alt>Duplicate</button> '
             f'<button name=action value="del:{cid}" class=alt>Remove</button></span></div>'
             f'{_fields(c, p, week, lines)}'
-            f'<p class=savebox><input name="{cid}__savename" placeholder="save this chunk as…" maxlength={NAME_MAX}> '
+            + ("" if i == len(chunks) - 1 else
+               f'<p><label>Bottom edge <select name="{cid}__cut">{_opts(tall.CUTS.items(), c.get("cut") or "")}</select></label> '
+               f'<label>Slope <select name="{cid}__slope">{_opts([("0", "Gentle"), ("1", "Normal"), ("2", "Steep")], c.get("slope", 1))}'
+               f'</select></label></p>')
+            + f'<p class=savebox><input name="{cid}__savename" placeholder="save this chunk as…" maxlength={NAME_MAX}> '
             f'<button name=action value="savechunk:{cid}" class=alt>Save chunk</button></p></section>')
     add = _opts([(k, v[0]) for k, v in tall.TYPES.items()], "quote")
     ins = _opts([(n, n) for n in sorted(saved_chunks)], "")
@@ -159,6 +164,10 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
     get = lambda f: form.get(f"{cid}__{f}")  # noqa: E731
     if get("size") in ("0", "1", "2"):
         c["size"] = int(get("size"))
+    if get("cut") in tall.CUTS:
+        c["cut"] = get("cut")
+    if get("slope") in ("0", "1", "2"):
+        c["slope"] = int(get("slope"))
     if t == "header":
         c["title"], c["sub"] = " ".join(str(get("title") or "").split())[:120], " ".join(str(get("sub") or "").split())[:120]
     if t in ("host", "footer"):

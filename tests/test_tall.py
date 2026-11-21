@@ -56,6 +56,9 @@ async def test_build_a_tall_picture_with_menus(tmp_path):
             first_line = next(iter(next(iter(poster.store.get(dkey)["candidates"].values()))))
             chunks = await build("save", **{"c2__pick_line": first_line, "c2__kind": "nope", "c2__host": "ghost"})
             assert chunks[1]["line"] == first_line and chunks[1]["kind"] == "chibi_pointing" and chunks[1]["host"] == ""
+            chunks = await build("save", **{"c1__cut": "down", "c1__slope": "2", "c2__cut": "sideways"})
+            assert chunks[0]["cut"] == "down" and chunks[0]["slope"] == 2 and not chunks[1].get("cut")
+            chunks = await build("save", **{"c1__cut": ""})
             chunks = await build("add", newtype="grid")
             assert chunks[-1]["type"] == "grid" and chunks[-1]["id"] == "c5"
             chunks = await build("add", newtype="grid")
@@ -120,5 +123,30 @@ def test_document_mixes_regular_and_chibi_and_pins_a_pool_picture(tmp_path):
         assert "Hi!" in doc and "Sleepy." in doc and "STREAMS" in doc and "Wow" in doc and "Pick a stream" in doc
         assert "Nov 15-21" not in doc                                        # no header chunk in this stack
         assert tall.total(chunks) == 520 + 380 + 150 + 170 + 200
+    finally:
+        hosts.init(None)
+
+
+def test_diagonal_cuts_clip_the_edge_and_keep_the_height(tmp_path):
+    hosts.init(tmp_path, defaults=False)
+    from types import SimpleNamespace
+    week = SimpleNamespace(days=[[]], day_name=lambda i: "SUN", tz=None)
+    ctx = {"host": "clark", "week": week, "img": lambda u: "", "notes": [], "facts": {}, "heading": "H", "range": "R",
+           "seed": 1, "pins": {}}
+    chunks = [{"id": "c1", "type": "quote", "size": 1, "text": "One", "cut": "down", "slope": 2},
+              {"id": "c2", "type": "quote", "size": 1, "text": "Two", "cut": "up", "slope": 0},
+              {"id": "c3", "type": "quote", "size": 1, "text": "Three", "cut": "down", "slope": 1},   # last: no cut
+              ]
+    try:
+        assert [tall.cut_depth(chunks, i) for i in range(3)] == [88, 60, 0]     # steep clamps to 40% of the height
+        doc = tall.document(chunks, ctx)
+        assert "polygon(0 0,100% 0,100% 100%,0 calc(100% - 88px))" in doc         # down: left edge higher
+        assert "polygon(0 0,100% 0,100% calc(100% - 60px),0 100%)" in doc          # up: right edge higher
+        assert doc.count("<line") == 4 and "<svg" in doc                           # a stripe (2 lines) per cut
+        assert f"height:{tall.total(chunks)}px" in doc and "#563520" in doc        # Clark's band colours
+        straight = tall.document([dict(c, cut="") for c in chunks], ctx)
+        assert "clip-path" not in straight and "<svg" not in straight
+        assert tall.cut_depth([dict(chunks[0], cut="")] + chunks, 0) == 0
+        assert "Slants down" in tall.CUTS["down"] and tall.total(tall.BUILTIN["Week overview (diagonal)"]) <= tall.MAX_H
     finally:
         hosts.init(None)

@@ -8,7 +8,12 @@ add up to at most MAX_H pixels. This file is the model and the drawing; the buil
 saving) is flavrpromo/tall_page.py, and the article editor adds a tall picture as a section
 (flavrpromo/article_editor.py).
 
-A chunk is a dict: {"id", "type", "size" (0 small, 1 medium, 2 large), ...fields of its type}.
+A chunk is a dict: {"id", "type", "size" (0 small, 1 medium, 2 large), "cut", "slope", ...fields of its type}.
+``cut`` is the shape of the chunk's bottom edge: "" straight, "down" slanting down to the right, "up"
+slanting down to the left (owner 2026-11-21: diagonal cuts "add a more fun feel"); ``slope`` 0 / 1 / 2 is
+how steep (SLOPES px). A chunk with a cut, and the one under it, get their own background colour (BANDS)
+and a stripe is drawn along the seam; the stack's height does not change (the cut eats into the chunk's
+own bottom, so its content gets a little less room).
   header   a title and a line under it (blank = the article's heading and date range)     title, sub
   host     a host picture on one side, a speech bubble with their line on the other      host, kind, var, side, line
   stream   one stream: thumbnail, name, game, time, and a line                              ref ("d<day>:<n>"), line
@@ -47,6 +52,12 @@ TYPES: Dict[str, Any] = {
     "footer": ("Sign-off strip", (260, 340, 440)),
 }
 SIDES = {"left": "Host on the left", "right": "Host on the right"}
+CUTS = {"": "Straight edge", "down": "Slants down to the right ↘", "up": "Slants down to the left ↙"}
+SLOPES = (60, 110, 170)              # px the slanted edge drops over the 1600 px width: gentle / normal / steep
+BANDS = {                            # background colours of chunks next to a cut (taken in turn)
+    "colette": ("#2a0f2a", "#521b4c", "#1b1018", "#3d1233"),
+    "clark": ("#2a1b10", "#563520", "#33220f", "#6a4528"),
+}
 THEMES = {
     "colette": {"bg": "linear-gradient(160deg,#1b1018,#3d1233 55%,#2a0f2a)", "fg": "#fff", "accent": "#f72ca2",
                 "gold": "#f8cf33", "paper": "#fff", "ink": "#1a1a1a", "font": "'DejaVu Sans',sans-serif"},
@@ -72,7 +83,7 @@ def total(chunks: List[Dict[str, Any]]) -> int:
 def new_chunk(ctype: str, existing: List[Dict[str, Any]], **fields: Any) -> Dict[str, Any]:
     """A fresh chunk of type ``ctype`` with an id not used in ``existing`` and its defaults."""
     n = 1 + max([int(c["id"][1:]) for c in existing if str(c.get("id", "")).startswith("c") and c["id"][1:].isdigit()] or [0])
-    base: Dict[str, Any] = {"id": f"c{n}", "type": ctype if ctype in TYPES else "quote", "size": 1}
+    base: Dict[str, Any] = {"id": f"c{n}", "type": ctype if ctype in TYPES else "quote", "size": 1, "cut": "", "slope": 1}
     defaults = {"header": {"title": "", "sub": ""},
                 "host": {"host": "", "kind": "happy", "var": "", "side": "left", "line": ""},
                 "stream": {"ref": "", "line": ""}, "stats": {}, "grid": {"day": 0}, "quote": {"text": ""},
@@ -96,6 +107,12 @@ BUILTIN: Dict[str, List[Dict[str, Any]]] = {
         {"id": "c1", "type": "header", "size": 1, "title": "", "sub": ""},
         {"id": "c2", "type": "host", "size": 1, "host": "", "kind": "happy", "var": "", "side": "left", "line": ""},
         {"id": "c3", "type": "stats", "size": 1},
+        {"id": "c4", "type": "footer", "size": 0, "host": "", "kind": "chibi_happy", "var": "", "line": ""},
+    ],
+    "Week overview (diagonal)": [
+        {"id": "c1", "type": "header", "size": 1, "cut": "down", "title": "", "sub": ""},
+        {"id": "c2", "type": "host", "size": 1, "cut": "up", "host": "", "kind": "happy", "var": "", "side": "left", "line": ""},
+        {"id": "c3", "type": "stats", "size": 1, "cut": "down"},
         {"id": "c4", "type": "footer", "size": 0, "host": "", "kind": "chibi_happy", "var": "", "line": ""},
     ],
     "Day in detail": [
@@ -147,14 +164,27 @@ def tile_choices(week: Any) -> List[Dict[str, str]]:
     return out
 
 
-def _draw(c: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+def cut_depth(chunks: List[Dict[str, Any]], i: int) -> int:
+    """How many px the bottom edge of chunk ``i`` drops (0 = straight or the last chunk; at most 40% of its height)."""
+    c = chunks[i]
+    if i == len(chunks) - 1 or c.get("cut") not in ("down", "up"):
+        return 0
+    try:
+        d = SLOPES[max(0, min(2, int(c.get("slope", 1))))]
+    except (TypeError, ValueError):
+        d = SLOPES[1]
+    return max(0, min(d, int(height(c) * 0.4)))          # the content keeps at least 60% of the chunk
+
+
+def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
+    """One chunk's content in a box ``h`` px tall (its height minus what a cut takes off the bottom)."""
     th, week, img = ctx["theme"], ctx["week"], ctx["img"]
-    h, kind = height(c), c.get("type")
+    kind = c.get("type")
     box = f'position:relative;height:{h}px;overflow:hidden;padding:0 70px;'
     if kind == "header":
         title = c.get("title") or ctx.get("heading") or ""
         sub = c.get("sub") or ctx.get("range") or ""
-        logo = f'<img src="{logo_data_url()}" style="height:{h - 90}px;margin-right:34px">' if ctx["host"] == "colette" else ""
+        logo = f'<img src="{logo_data_url()}" style="height:{max(70, h - 90)}px;margin-right:34px">' if ctx["host"] == "colette" else ""
         return (f'<div style="{box}display:flex;align-items:center">{logo}<div><div style="font-size:{min(78, h // 3)}px;'
                 f'font-weight:900;letter-spacing:3px;text-transform:uppercase">{_e(title)}</div>'
                 f'<div style="font-size:30px;color:{th["gold"]};font-weight:700;margin-top:6px">{_e(sub)}</div></div></div>')
@@ -181,15 +211,17 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any]) -> str:
         when = clock(t.at, week.tz) + (f" · {hm(t.length)}" if t.kind == "past" and t.end else
                                        " · LIVE" if t.kind == "live" else "")
         th_w = int((h - 40) * 16 / 9)
+        f = min(1.0, h / 230)                     # a stream chunk with a deep cut has less room: smaller type
+        place = " · ".join(x for x in (week.day_name(day_i), when, t.game) if x)
         return (f'<div style="{box}display:flex;gap:34px;align-items:center">'
                 f'<div style="width:{th_w}px;height:{h - 40}px;flex:none;border-radius:8px;background:#2a1026 center/cover;{bg}'
-                f'box-shadow:0 6px 18px #0009"></div><div style="flex:1;min-width:0"><div style="font-size:44px;font-weight:900">'
-                f'{_e(t.name)}</div><div style="font-size:28px;color:{th["gold"]};font-weight:700;margin:4px 0 8px">'
-                f'{_e(" · ".join(x for x in (week.day_name(day_i), when, t.game) if x))}</div>'
-                f'<div style="font-size:24px;opacity:.85;font-style:italic;white-space:nowrap;overflow:hidden;'
+                f'box-shadow:0 6px 18px #0009"></div><div style="flex:1;min-width:0"><div style="font-size:{int(44 * f)}px;'
+                f'font-weight:900">{_e(t.name)}</div><div style="font-size:{int(28 * f)}px;color:{th["gold"]};font-weight:700;'
+                f'margin:2px 0 {int(8 * f)}px">{_e(place)}</div>'
+                f'<div style="font-size:{int(24 * f)}px;opacity:.85;font-style:italic;white-space:nowrap;overflow:hidden;'
                 f'text-overflow:ellipsis">{_e(t.title)}</div>'
-                + (f'<div style="margin-top:12px;font-size:26px;font-weight:700;color:{th["accent"]}">“{_e(c["line"])}”</div>'
-                   if c.get("line") else "") + '</div></div>')
+                + (f'<div style="margin-top:{int(12 * f)}px;font-size:{int(26 * f)}px;font-weight:700;color:{th["accent"]}">'
+                   f'“{_e(c["line"])}”</div>' if c.get("line") else "") + '</div></div>')
     if kind == "stats":
         rows = list(ctx.get("notes") or [])[:4]
         if not rows:
@@ -233,14 +265,37 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any]) -> str:
 def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
     """The whole tall picture as one HTML page, 1600 px wide and as tall as its chunks add up to
     (screenshot it at size=(WIDTH, total(chunks))). ``ctx``: host (the draft's), week, img (render.ImageCache.data_url),
-    heading, range, notes, facts, seed, pins (the draft's picture choices, hosts.look)."""
+    heading, range, notes, facts, seed, pins (the draft's picture choices, hosts.look).
+    Chunks are laid out one under the other; a chunk with a diagonal cut is clipped along its slanted
+    bottom edge and the next chunk's background shows through the gap (it starts that much higher)."""
     ctx = dict(ctx, theme=THEMES.get(ctx["host"], THEMES["colette"]))
     th = ctx["theme"]
-    rows = "".join(_draw(c, ctx) for c in chunks)
+    bands = BANDS.get(ctx["host"], BANDS["colette"])
+    cuts = [cut_depth(chunks, i) for i in range(len(chunks))]
+    n, y, rows, seams = len(chunks), 0, [], []
+    for i, c in enumerate(chunks):
+        h, d, above = height(c), cuts[i], (cuts[i - 1] if i else 0)
+        bg = f"background:{bands[i % len(bands)]};" if (d or above) else ""
+        clip = ""
+        if d:
+            clip = (f"clip-path:polygon(0 0,100% 0,100% 100%,0 calc(100% - {d}px));" if c.get("cut") == "down" else
+                    f"clip-path:polygon(0 0,100% 0,100% calc(100% - {d}px),0 100%);")
+            seams.append((y + h, d, c.get("cut")))
+        rows.append(f'<div style="position:absolute;left:0;top:{y - above}px;width:{WIDTH}px;height:{h + above}px;'
+                    f'z-index:{n - i};{bg}{clip}"><div style="position:absolute;left:0;top:{above}px;width:{WIDTH}px;'
+                    f'height:{h - d}px">{_draw(c, ctx, h - d)}</div></div>')
+        y += h
+    stripes = ""
+    for bottom, d, kind in seams:
+        y1, y2 = (bottom - d, bottom) if kind == "down" else (bottom, bottom - d)
+        stripes += (f'<line x1="0" y1="{y1}" x2="{WIDTH}" y2="{y2}" stroke="#fff" stroke-width="18"/>'
+                    f'<line x1="0" y1="{y1}" x2="{WIDTH}" y2="{y2}" stroke="{th["accent"]}" stroke-width="7"/>')
+    svg = (f'<svg style="position:absolute;left:0;top:0;z-index:99" width="{WIDTH}" height="{max(1, y)}" '
+           f'viewBox="0 0 {WIDTH} {max(1, y)}">{stripes}</svg>') if stripes else ""
     return (f'<!doctype html><html><head><meta charset=utf-8><style>*{{box-sizing:border-box;margin:0}}'
-            f'body{{width:{WIDTH}px;height:{max(1, total(chunks))}px;overflow:hidden;background:{th["bg"]};color:{th["fg"]};'
-            f'font-family:{th["font"]}}}</style></head><body>{rows}</body></html>')
+            f'body{{position:relative;width:{WIDTH}px;height:{max(1, y)}px;overflow:hidden;background:{th["bg"]};color:{th["fg"]};'
+            f'font-family:{th["font"]}}}</style></head><body>{"".join(rows)}{svg}</body></html>')
 
 
-__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
+__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CUTS", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
            "tile_choices"]
