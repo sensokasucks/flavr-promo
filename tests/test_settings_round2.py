@@ -64,10 +64,11 @@ async def test_card_edits_reach_the_prompt_and_reset():
 # ── the article editor ────────────────────────────────────────────────────
 class Shooter:
     def __init__(self):
-        self.docs = []
+        self.docs, self.sizes = [], []
 
     async def png(self, doc, size=None):
         self.docs.append(doc)
+        self.sizes.append(size)
         return b"\x89PNG fake"
 
 
