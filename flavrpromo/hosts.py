@@ -39,6 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import gameinfo
 from .store import Store
 
 HOSTS: Dict[str, Dict[str, str]] = {
@@ -149,6 +150,7 @@ def pictures(key: str) -> Dict[str, str]:
 # ── lines ──────────────────────────────────────────────────────────────
 # Blanks: {name} {game} {tag} {length} {signoff} {streams} {hours} {top_name} {top_count}
 # {longest_name} {longest_len} {quiet_day} {quiet_name} {new_game} {new_game_name} {other} {streams_text} ("1 stream")
+# go-live: {genre} (live_new_genre, IGDB's first genre)
 # day posts: {when} ("Today", "This weekend") {when_lower} {count} {first_name} {first_time}
 TEMPLATES: Dict[str, Dict[str, List[str]]] = {
     "colette": {
@@ -157,6 +159,8 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
         "live_game": ["{name} is LIVE with {game}!! Cappuccinos ready? ☕", "{game} time with {name}! Let's GOOO!"],
         "live_new_game": ["NEW GAME ALERT!! {name} is trying {game} for the first time!",
                           "{name} + {game} = a brand new adventure!! Be there for the first one!"],
+        "live_new_genre": ["NEW GAME ALERT!! {name} is diving into {game}, a {genre} game! First time ever!",
+                           "Brand new {genre} adventure: {name} is starting {game}!! Coffee up! ☕"],
         "live_part": ["{name} is back on {game}! {tag}, don't miss it!", "{game} {tag} with {name}! The saga continues!!"],
         "live_change": ["Plot twist! {name} switched to {game}!!", "{name} just moved over to {game}! Keep up, team!"],
         "live_end": ["{name} wrapped up after {length}! Great show!!", "That's a wrap for {name}! {length} of content, yes!"],
@@ -193,6 +197,8 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
         "live_game": ["{name} is live with {game}. Filed under: worth watching.", "{game}, with {name}. Now in session."],
         "live_new_game": ["{name} is starting {game} for the first time. A new folder has been opened.",
                           "First {game} stream for {name}. I've noted the date."],
+        "live_new_genre": ["{name} is starting {game}, a {genre} game, for the first time. A new folder has been opened.",
+                           "First {game} stream for {name}. Genre on file: {genre}."],
         "live_part": ["{name} returns to {game}. {tag}, for the records.", "{game} with {name}: {tag}. Continuing the file."],
         "live_change": ["{name} has moved on to {game}. Records updated.", "Now {game}, per {name}. Filed."],
         "live_end": ["{name} streamed for {length}. Filed and closed.", "Stream closed: {name}, {length}. In order."],
@@ -265,15 +271,19 @@ def length_words(sec: float) -> str:
 
 
 def live_line(key: str, event: str, name: str, game: str = "", tag: str = "", length: float = 0,
-              signoff: str = "", rng: Optional[random.Random] = None) -> str:
+              signoff: str = "", rng: Optional[random.Random] = None, genre: str = "") -> str:
     """The host's line for a go-live card. ``event``: "start", "change" or "end"; ``tag`` the game's
-    history tag as stored ("new", "part:8", ...; flavrpromo/games.py)."""
+    history tag as stored ("new", "part:8", ...; flavrpromo/games.py); ``genre`` its first genre in
+    lower case when IGDB knew it (flavrpromo/gameinfo.py; a new game's line can say it)."""
     from .games import label
-    facts = {"name": name, "game": game, "tag": label(tag), "length": length_words(length), "signoff": signoff}
+    facts = {"name": name, "game": game, "tag": label(tag), "length": length_words(length), "signoff": signoff,
+             "genre": genre}
     if event == "start":
         slot = "live_new_game" if tag == "new" else "live_part" if tag.startswith("part:") else \
             "live_game" if game else "live_start"
-        return one(key, slot, facts, "live_start", rng)
+        if slot == "live_new_game" and genre:
+            slot = "live_new_genre"                 # "a survival game!": only with a genre
+        return one(key, slot, facts, "live_new_game" if slot == "live_new_genre" else "live_start", rng)
     if event == "change":
         return one(key, "live_change", facts, "", rng)
     slot = "live_end_signoff" if signoff else "live_end_long" if length >= LONG_STREAM else "live_end"
@@ -322,6 +332,11 @@ def facts(store: Store, week: Any) -> Dict[str, Any]:
             if seg["tag"] == "new" and a <= float(seg["started_at"]) < b:
                 out.setdefault("new_game", seg["game"])
                 out.setdefault("new_game_name", t.name)
+    if out.get("new_game"):                         # what it is, for KoboldCpp's lines (flavrpromo/gameinfo.py)
+        info = gameinfo.cached(store, out["new_game"])
+        about = "; ".join(x for x in (", ".join(info.get("genres") or []), info.get("summary") or "") if x)
+        if about:
+            out["new_game_about"] = about
     return out
 
 

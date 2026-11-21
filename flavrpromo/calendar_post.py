@@ -189,6 +189,7 @@ class CalendarPoster:
         # the bot's own web address on the home network ("http://192.168.0.20:3871"), for the X Article
         # page link in the share DM; set by flavrpromo/__main__.py from WEB_ADDRESS (or found by itself)
         self.web_url = ""
+        self.kobold = None                  # flavrpromo/kobold.py Kobold when KOBOLD_URL is set (flavrpromo/__main__.py)
         self._poke = asyncio.Event()
         self._lock = asyncio.Lock()
         self._seen: Dict[str, Tuple[str, Dict[str, Tile]]] = {}    # group → (week, {key: tile}) last look

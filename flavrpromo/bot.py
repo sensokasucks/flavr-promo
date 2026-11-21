@@ -90,7 +90,7 @@ from discord import app_commands
 from . import focus, sysinfo
 from .calendar import DAY_NAMES, REVIEW_NAMES
 from .config import Settings
-from . import games, host_picker, hosts, promo, signoff, talent
+from . import gameinfo, games, host_picker, hosts, promo, signoff, talent
 from .pings import KINDS, Pinger, length
 from .share import X_STYLES
 from . import groups
@@ -101,6 +101,7 @@ log = logging.getLogger("flavrpromo.bot")
 NO_PINGS = discord.AllowedMentions.none()
 # FlaVR brand colours (the logo's pink and teal); the friends group gets teal
 ENDED_COLOUR = 0x5B5F66
+LOOKUP_WAIT = 5.0                   # seconds a go-live post waits for a game look-up (flavrpromo/gameinfo.py)
 PLATFORM_ICONS = {"youtube": "▶️ YouTube", "twitch": "🟣 Twitch", "kick": "🟢 Kick"}
 
 
@@ -181,6 +182,7 @@ class PromoBot(discord.Client):
         self.calendar: Any = None
         # the community calendar (flavrpromo/promo.py Promo); set by flavrpromo/__main__.py
         self.promo: Any = None
+        self.game_info: Any = None          # flavrpromo/gameinfo.py GameInfo (IGDB; needs the Twitch keys)
         # set once Discord says we're in; the go-live watcher waits for it so its first posts don't get lost
         self.ready_event = asyncio.Event()
         self._register()
@@ -290,7 +292,12 @@ class PromoBot(discord.Client):
         game = now.get("game") or session.get("game")
         if game:
             tag = now.get("tag") if now.get("game") else ""
-            e.add_field(name="Playing", value=f"{game} · {tag}" if tag else game, inline=True)
+            # the game's store link and genres when IGDB knew it (flavrpromo/gameinfo.py; looked up in
+            # post_start / post_change before the card is drawn, read here from kv only)
+            info = gameinfo.cached(self.store, game)
+            shown = f"[{game}]({info['link']})" if info.get("link") else game
+            genres = f"\n*{' · '.join(info['genres'])}*" if info.get("genres") else ""
+            e.add_field(name="Playing", value=(f"{shown} · {tag}" if tag else shown) + genres, inline=True)
         if now.get("earlier"):
             e.add_field(name="Earlier", value=now["earlier"][:1024], inline=False)
         if session.get("restarts"):
@@ -323,11 +330,22 @@ class PromoBot(discord.Client):
         face = hosts.face(key) if key else None
         return [discord.File(str(face), filename=f"host{face.suffix}")] if face else []
 
+    async def _look_up(self, game: str) -> None:
+        """Fetch the game's details into kv before a card shows it (IGDB; at most LOOKUP_WAIT seconds,
+        so a slow answer never holds up a go-live post; the next edit picks it up)."""
+        if self.game_info is None or not game:
+            return
+        try:
+            await asyncio.wait_for(self.game_info.lookup(game), LOOKUP_WAIT)
+        except Exception as e:
+            log.info("game look-up for %s skipped: %s", game, e)
+
     def _host_say(self, key: str, event: str, person: Dict[str, Any], game: str = "", tag: str = "",
                   length_s: float = 0, signoff_text: str = "") -> str:
         """The message text above the card: "☕ **Colette Cappuccino:** <line>" (markdown in names escaped)."""
         esc = discord.utils.escape_markdown
-        line = hosts.live_line(key, event, esc(person["name"]), esc(game), tag, length_s, signoff_text)
+        genre = gameinfo.genre_word(gameinfo.cached(self.store, game)) if game else ""
+        line = hosts.live_line(key, event, esc(person["name"]), esc(game), tag, length_s, signoff_text, genre=genre)
         return f"{hosts.speaker(key)} {line}"[:2000] if line else ""
 
     async def post_start(self, person, session, live_on) -> Tuple[str, str]:
@@ -338,6 +356,8 @@ class PromoBot(discord.Client):
         main = main_platform(person, live_on)
         if not person.get("is_owner"):
             self.pinger.friend_live(person["name"], PLATFORM_ICONS.get(main, main))
+        segs_now = self.store.segments(session["id"]) if session.get("id") else []
+        await self._look_up(segs_now[-1]["game"] if segs_now else str(session.get("game") or ""))
         # the host (when /host setup on): chosen once per stream and saved, so every edit keeps them
         content, key = None, ""
         if hosts.enabled(self.store):
@@ -388,6 +408,8 @@ class PromoBot(discord.Client):
         return out
 
     async def post_change(self, person, session, live_on) -> None:
+        segs_now = self.store.segments(session["id"]) if session.get("id") else []
+        await self._look_up(segs_now[-1]["game"] if segs_now else "")
         kw: Dict[str, Any] = {}
         key = self._host_of(session)
         if key and session.get("id"):

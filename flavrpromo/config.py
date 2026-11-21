@@ -80,6 +80,9 @@ class Settings:
     # Community calendar (flavrpromo/promo.py): streams people add from their self-promo posts
     promo_weekly_limit: int = 7         # posts one person can add in 7 days (mods have no limit)
     promo_wait_hours: int = 6           # a channel link added while offline (no time given) waits this long to go live
+    # KoboldCpp (flavrpromo/kobold.py): more host lines on the review picker page; "" = templates only
+    kobold_url: str = ""                # e.g. http://192.168.1.50:5001 (KoboldCpp on its own PC)
+    kobold_key: str = ""                # only when KoboldCpp was started with --password
     # Storage
     data_dir: str = "/data"
     # One-time move of FlaVR Bot's calendar data (flavrpromo/import_old.py): the folder holding FlaVR
@@ -120,6 +123,8 @@ def load(env: Optional[Mapping[str, str]] = None) -> Settings:
         chromium_path=g("CHROMIUM_PATH"),
         promo_weekly_limit=max(1, _int(env, "PROMO_WEEKLY_LIMIT", 7)),
         promo_wait_hours=max(1, min(48, _int(env, "PROMO_WAIT_HOURS", 6))),
+        kobold_url=g("KOBOLD_URL").rstrip("/"),
+        kobold_key=g("KOBOLD_KEY"),
         data_dir=g("DATA_DIR", "/data"),
         import_dir=g("IMPORT_DIR", "/import"),
     )

@@ -26,6 +26,8 @@ from . import config, groups, host_picker, hosts
 from .bot import PromoBot
 from .calendar_post import CalendarPoster
 from .import_old import maybe_import
+from .gameinfo import GameInfo
+from .kobold import Kobold
 from .pings import Pinger
 from .promo import Promo
 from .platforms.kick import Kick
@@ -95,6 +97,10 @@ async def main() -> int:
         # Colette and Clark (flavrpromo/hosts.py): their pictures in DATA_DIR/hosts, and the review
         # line picker page /hosts/pick on the same web server (flavrpromo/host_picker.py)
         hosts.init(Path(s.data_dir) / "hosts")
+        # KoboldCpp's extra lines on the picker page (KOBOLD_URL / KOBOLD_KEY; flavrpromo/kobold.py)
+        poster.kobold = Kobold(http, s.kobold_url, s.kobold_key) if s.kobold_url else None
+        # game genres / summary / store link from IGDB with the Twitch keys (flavrpromo/gameinfo.py)
+        bot.game_info = GameInfo(store, checkers["twitch"])
         server.extra_routes.append(lambda app: host_picker.add_routes(app, poster))
 
         # go-live posts first, then a nudge so the calendar redraws within seconds

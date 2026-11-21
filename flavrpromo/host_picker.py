@@ -10,6 +10,9 @@ With hosts on (/host setup on), a Friday / Monday review doesn't post at its tim
      can swap the host, previews the two cards, and presses "Post it".
   3. The next calendar tick finds the picks: the opener card, the normal review board, then the
      desk sign-off card go out in that order, and the pending review is cleared.
+  With KOBOLD_URL set, KoboldCpp writes more lines for every slot in the background as soon as the
+  review starts waiting (``start_ai``, flavrpromo/kobold.py); they appear first in each slot with a ✨,
+  and the page's "Write more" button asks again. KoboldCpp offline = template lines only.
   An hour after the first DM, if nothing is picked, one more DM nudges (NUDGE_AFTER). Nothing ever
   posts without the owner's picks; a review that is never picked simply never posts. /calendar
   post review: (by hand) still posts the plain review at once.
@@ -21,6 +24,7 @@ flavrpromo/__main__.py (``add_routes`` on the bot's web server).
 
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import random
@@ -36,6 +40,7 @@ log = logging.getLogger("flavrpromo.host_picker")
 NUDGE_AFTER = 3600.0            # seconds after the first DM before the one reminder
 INDEX = "host_reviews"          # kv: the pending review keys, for the picker page
 HEADINGS = {"week": "Week in Review", "weekend": "Weekend in Review"}
+_tasks: Dict[str, "asyncio.Task[None]"] = {}     # KoboldCpp writing for a pending review (key → task)
 
 
 def key_of(label: str, group: str) -> str:
@@ -77,8 +82,10 @@ async def ready(poster: Any, group: str, label: str, start_iso: str) -> Optional
         p["asked_at"] = poster.clock()               # the calendar's clock (tests set it)
         store.put(k, p)
         store.put(INDEX, sorted(set(_index(store)) | {k}))
+        ai = start_ai(poster, k)
         await _dm(poster, f"🎙️ The {groups.heading(group, True, label)} is ready for {hosts.HOSTS[p['host']]['name']}. "
-                          f"Pick the lines and it posts: {link(poster)}")
+                          f"Pick the lines and it posts: {link(poster)}"
+                          + (" (KoboldCpp is writing more lines; they show up on the page in a few minutes)" if ai else ""))
         return None
     if p.get("ready"):
         return p
@@ -87,6 +94,45 @@ async def ready(poster: Any, group: str, label: str, start_iso: str) -> Optional
         store.put(k, p)
         await _dm(poster, f"⏰ The {groups.heading(group, True, label)} is still waiting for your picks: {link(poster)}")
     return None
+
+
+def start_ai(poster: Any, k: str) -> bool:
+    """Ask KoboldCpp (poster.kobold, None = KOBOLD_URL not set) for lines for pending review ``k`` in
+    the background; False when it can't (not set up, or already writing for it)."""
+    kob = getattr(poster, "kobold", None)
+    if kob is None or (k in _tasks and not _tasks[k].done()):
+        return False
+    p = poster.store.get(k)
+    if not p:
+        return False
+    p["ai_state"] = "writing"
+    poster.store.put(k, p)
+    _tasks[k] = asyncio.get_running_loop().create_task(_write(poster, k, p["host"]))
+    return True
+
+
+async def _write(poster: Any, k: str, host: str) -> None:
+    """The background half of ``start_ai``: new lines go first in each slot (marked in p["ai"])."""
+    store = poster.store
+    p = store.get(k) or {}
+    try:
+        got = await poster.kobold.write(host, p.get("facts") or {}, HEADINGS.get(p.get("label"), "review"),
+                                        p.get("notes") or [])
+    except Exception:
+        log.exception("KoboldCpp lines failed")
+        got = {}
+    p = store.get(k)                                # re-read: the owner may have saved picks meanwhile
+    if not p or p.get("host") != host:
+        return                                      # posted, replaced or host swapped: these lines don't fit
+    ai = list(p.get("ai") or [])
+    for slot, lines in got.items():
+        if slot in (p.get("candidates") or {}):
+            new = [x for x in lines if x not in p["candidates"][slot]]
+            p["candidates"][slot] = new + p["candidates"][slot]
+            ai += new
+    p["ai"] = ai
+    p["ai_state"] = "done" if got else "offline"
+    store.put(k, p)
 
 
 def link(poster: Any) -> str:
@@ -146,6 +192,10 @@ def _e(s: Any) -> str:
     return html.escape(str(s or ""))
 
 
+AI_STATES = {"writing": "writing lines… (refresh in a minute or two)", "done": "its lines are marked ✨",
+             "offline": "couldn't be reached, so only the template lines are here"}
+
+
 def _switch(p: Dict[str, Any], name: str, legend: str, options: Any) -> str:
     """Radio buttons for one of a pending review's picture switches (opener_kind / desk_kind)."""
     cur = p.get(name) or options[0][0]
@@ -154,7 +204,8 @@ def _switch(p: Dict[str, Any], name: str, legend: str, options: Any) -> str:
                       for v, n in options) + "</fieldset>")
 
 
-def page(store: Any, saved: str = "") -> str:
+def page(store: Any, saved: str = "", ai_on: bool = False) -> str:
+    """The picker page. ``ai_on``: KOBOLD_URL is set (shows KoboldCpp's state and the Write more button)."""
     blocks = []
     for k in _index(store):
         p = store.get(k)
@@ -167,8 +218,10 @@ def page(store: Any, saved: str = "") -> str:
                 n = (p.get("notes") or [{}] * (i + 1))[i]
                 title = f"note: {n.get('label', '').lower()} ({n.get('value', '')})"
             cur = chosen(p, slot)
+            ai = set(p.get("ai") or [])
             opts = "".join(
-                f'<label><input type=radio name="{slot}" value="{_e(c)}"{" checked" if c == cur else ""}> {_e(c)}</label>'
+                f'<label><input type=radio name="{slot}" value="{_e(c)}"{" checked" if c == cur else ""}> '
+                f'{"✨ " if c in ai else ""}{_e(c)}</label>'
                 for c in cands)
             custom = cur if cur and cur not in cands else ""
             opts += (f'<label><input type=radio name="{slot}" value="__custom"{" checked" if custom else ""}> your own: '
@@ -179,7 +232,9 @@ def page(store: Any, saved: str = "") -> str:
             f'<section><h2>{_e(groups.heading(p["group"], True, p["label"]))} · {_e(p["facts"].get("range"))}</h2>'
             f'<form method=post><input type=hidden name=key value="{_e(k)}">'
             f'<p>Host: <b>{_e(h["emoji"])} {_e(h["name"])}</b> <button name=action value=swap>Swap host</button></p>'
-            f'{"".join(slots)}'
+            + (f'<p class=ai>✨ KoboldCpp: {_e(AI_STATES.get(p.get("ai_state") or "", "ready"))} '
+               f'<button name=action value=ai>Write more</button></p>' if ai_on else "")
+            + "".join(slots)
             # each card's picture: regular or chibi (hosts.py kinds; the other one peeks on the opener)
             + _switch(p, "opener_kind", "opener picture", (("pose", "regular"), ("chibi", "chibi")))
             + _switch(p, "desk_kind", "desk picture", (("desk", "regular"), ("chibi_desk", "chibi")))
@@ -194,7 +249,7 @@ def page(store: Any, saved: str = "") -> str:
             "max-width:1100px;margin:auto;padding:16px}fieldset{border:1px solid #555;margin:10px 0;border-radius:8px}"
             "label{display:block;margin:6px 0}input[type=text],input:not([type]){width:60%}"
             "button{padding:8px 14px;border-radius:8px;border:0;font-weight:bold}.go{background:#f72ca2;color:#fff}"
-            ".prev img{width:100%;margin-top:10px;border-radius:8px}.saved{background:#2ae0d4;color:#000;padding:8px;"
+            ".ai{color:#b7ef33}.prev img{width:100%;margin-top:10px;border-radius:8px}.saved{background:#2ae0d4;color:#000;padding:8px;"
             "border-radius:8px}section{border-bottom:2px solid #444;padding-bottom:20px}</style></head><body>"
             f"<h1>🎙️ Host line picker</h1>{note}{body}</body></html>")
 
@@ -203,7 +258,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
     store = poster.store
 
     async def get(request: web.Request) -> web.Response:
-        return web.Response(text=page(store, request.query.get("saved", "")), content_type="text/html")
+        return web.Response(text=page(store, request.query.get("saved", ""), getattr(poster, "kobold", None) is not None),
+                            content_type="text/html")
 
     async def post(request: web.Request) -> web.Response:
         form = await request.post()
@@ -212,11 +268,13 @@ def add_routes(app: web.Application, poster: Any) -> None:
         if not p:
             raise web.HTTPSeeOther("/hosts/pick?saved=That+review+isn%27t+waiting+any+more.")
         action = str(form.get("action") or "save")
-        if action == "swap":
+        if action == "ai":
+            msg = ""                                # keeps the page as it is; start_ai below
+        elif action == "swap":
             others = [h for h in hosts.HOSTS if h != p["host"]] or [p["host"]]
             p["host"] = others[0]
             p["candidates"] = hosts.review_candidates(p["host"], p["facts"])
-            p["picks"] = {}
+            p["picks"], p["ai"] = {}, []
             msg = f"Swapped to {hosts.HOSTS[p['host']]['name']}."
         else:
             picks = {}
@@ -236,8 +294,14 @@ def add_routes(app: web.Application, poster: Any) -> None:
                 p["ready"] = True
                 msg = "Posting now: opener, board, then the desk card."
         store.put(k, p)
+        if action == "swap" or action == "ai":          # new lines from KoboldCpp for this host
+            if start_ai(poster, k):
+                msg += " KoboldCpp is writing more lines." if action == "swap" else "KoboldCpp is writing more lines."
+            elif action == "ai":
+                msg = "KoboldCpp isn't set up (KOBOLD_URL)." if getattr(poster, "kobold", None) is None else \
+                    "KoboldCpp is still writing; refresh in a minute."
         poster.poke()
-        raise web.HTTPSeeOther(f"/hosts/pick?saved={quote(msg)}")
+        raise web.HTTPSeeOther(f"/hosts/pick?saved={quote(msg.strip())}")
 
     async def preview(request: web.Request) -> web.Response:
         k = request.query.get("key", "")
