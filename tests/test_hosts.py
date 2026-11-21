@@ -146,11 +146,14 @@ async def test_review_waits_for_picks_then_posts_in_order(tmp_path):
         assert r.status == 303 and store.get(key)["host"] == "colette"
         first = store.get(key)["candidates"]["opener"][0]
         r = await client.post("/hosts/pick", data={"key": key, "action": "post", "opener": "__custom",
-                                                   "opener__text": "  My   own line  ", "desk_nudge": first},
+                                                   "opener__text": "  My   own line  ", "desk_nudge": first,
+                                                   "opener_kind": "chibi", "desk_kind": "chibi_desk"},
                               allow_redirects=False)
         assert r.status == 303
     pend = store.get(key)
     assert pend["ready"] and pend["picks"]["opener"] == "My own line"
+    assert (pend["opener_kind"], pend["desk_kind"]) == ("chibi", "chibi_desk")     # the picture switches
+    assert 'name=opener_kind value=chibi checked' in host_picker.page(store)
 
     before = len(d.sent)
     await p.tick()
@@ -307,5 +310,20 @@ def test_built_in_pictures(tmp_path):
         assert hosts.pictures("clark")["head"] == "yours"
         page = host_cards.desk("colette", "hi", "", "bye", "chibi_desk")
         assert "data:image/webp;base64," in page
+    finally:
+        hosts.init(None)
+
+
+def test_opener_chibi_main_swaps_with_the_peek(tmp_path):
+    hosts.init(tmp_path, defaults=False)
+    try:
+        hosts.save_picture("colette", "happy", b"BIG", "a.png")
+        hosts.save_picture("colette", "chibi_happy", b"SMALL", "b.webp")
+        reg = host_cards.opener("colette", "W", "r", "hi", [], [], "happy")
+        chi = host_cards.opener("colette", "W", "r", "hi", [], [], "happy", chibi_main=True)
+        # the regular pose is the big figure first, the chibi peeks (and the other way round)
+        big, small = "base64,QklH", "base64,U01BTEw="          # b"BIG", b"SMALL"
+        assert reg.index(big) < reg.index(small)
+        assert chi.index(small) < chi.index(big)
     finally:
         hosts.init(None)

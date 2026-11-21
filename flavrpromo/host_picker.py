@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import html
 import logging
+import random
 import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -54,9 +55,12 @@ def make(store: Any, group: str, label: str, week: Any, start_iso: str, host: st
     """A fresh pending review: host, facts, notes and candidate lines (nothing picked)."""
     key = host or hosts.choose(store)
     f = hosts.facts(store, week)
+    # regular or chibi picture on each card, picked at random so the two mix (Sen 2026-11-21); the
+    # picker page's "opener picture" / "desk picture" switches change them
     return {"group": group, "label": label, "start": start_iso, "host": key, "facts": f,
             "notes": hosts.notes(f), "candidates": hosts.review_candidates(key, f), "picks": {},
-            "ready": False, "asked_at": time.time(), "nudged": False, "desk_kind": "desk"}
+            "ready": False, "asked_at": time.time(), "nudged": False,
+            "opener_kind": random.choice(("pose", "chibi")), "desk_kind": random.choice(("desk", "chibi_desk"))}
 
 
 async def ready(poster: Any, group: str, label: str, start_iso: str) -> Optional[Dict[str, Any]]:
@@ -110,7 +114,7 @@ def card_html(p: Dict[str, Any], card: str) -> str:
         notes = p.get("notes") or []
         return host_cards.opener(key, HEADINGS.get(p["label"], "In Review"), str(f.get("range") or ""),
                                  chosen(p, "opener"), notes, [chosen(p, f"note{i}") for i in range(len(notes))],
-                                 hosts.pose(f))
+                                 hosts.pose(f), p.get("opener_kind") == "chibi")
     return host_cards.desk(key, chosen(p, "desk_highlight"), chosen(p, "desk_nudge"), chosen(p, "desk_signoff"),
                            p.get("desk_kind") or "desk")
 
@@ -142,6 +146,14 @@ def _e(s: Any) -> str:
     return html.escape(str(s or ""))
 
 
+def _switch(p: Dict[str, Any], name: str, legend: str, options: Any) -> str:
+    """Radio buttons for one of a pending review's picture switches (opener_kind / desk_kind)."""
+    cur = p.get(name) or options[0][0]
+    return (f"<fieldset><legend>{_e(legend)}</legend>"
+            + "".join(f'<label><input type=radio name={name} value={v}{" checked" if cur == v else ""}> {_e(n)}</label>'
+                      for v, n in options) + "</fieldset>")
+
+
 def page(store: Any, saved: str = "") -> str:
     blocks = []
     for k in _index(store):
@@ -168,12 +180,10 @@ def page(store: Any, saved: str = "") -> str:
             f'<form method=post><input type=hidden name=key value="{_e(k)}">'
             f'<p>Host: <b>{_e(h["emoji"])} {_e(h["name"])}</b> <button name=action value=swap>Swap host</button></p>'
             f'{"".join(slots)}'
-            # the desk card's picture: the regular desk or the chibi desk (hosts.py kinds desk / chibi_desk)
-            f'<fieldset><legend>desk picture</legend>'
-            + "".join(f'<label><input type=radio name=desk_kind value={v}{" checked" if p.get("desk_kind", "desk") == v else ""}>'
-                      f' {n}</label>' for v, n in (("desk", "regular"), ("chibi_desk", "chibi")))
-            + '</fieldset>'
-            f'<p><button name=action value=save>Save and preview</button> '
+            # each card's picture: regular or chibi (hosts.py kinds; the other one peeks on the opener)
+            + _switch(p, "opener_kind", "opener picture", (("pose", "regular"), ("chibi", "chibi")))
+            + _switch(p, "desk_kind", "desk picture", (("desk", "regular"), ("chibi_desk", "chibi")))
+            + f'<p><button name=action value=save>Save and preview</button> '
             f'<button name=action value=post class=go>Post it</button></p></form>'
             f'<div class=prev><img src="/hosts/preview.png?{q}&card=opener" alt="opener preview">'
             f'<img src="/hosts/preview.png?{q}&card=desk" alt="desk preview"></div></section>')
@@ -219,6 +229,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
             p["picks"] = picks
             if str(form.get("desk_kind") or "") in ("desk", "chibi_desk"):
                 p["desk_kind"] = str(form.get("desk_kind"))
+            if str(form.get("opener_kind") or "") in ("pose", "chibi"):
+                p["opener_kind"] = str(form.get("opener_kind"))
             msg = "Saved."
             if action == "post":
                 p["ready"] = True

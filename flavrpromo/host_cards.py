@@ -43,12 +43,15 @@ def _doc(body_style: str, inner: str) -> str:
 
 
 def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[str, str]],
-           comments: List[str], pose: str) -> str:
-    """The opener card. ``notes``: hosts.notes() rows; ``comments``: the picked comment for each."""
-    pic = hosts.data_url(key, pose)
-    # the chibi in the same mood peeks over the top-right edge of the bubble / report: drawn before
-    # it, so the card covers the chibi's lower half (no chibi uploaded = nothing)
-    chibi = hosts.data_url(key, f"chibi_{pose}")
+           comments: List[str], pose: str, chibi_main: bool = False) -> str:
+    """The opener card. ``notes``: hosts.notes() rows; ``comments``: the picked comment for each.
+    ``chibi_main``: the big figure is the chibi and the regular pose peeks (picker page "opener
+    picture"; Sen 2026-11-21: chibis mixed in with the regular pictures)."""
+    big, small = (f"chibi_{pose}", pose) if chibi_main else (pose, f"chibi_{pose}")
+    pic = hosts.data_url(key, big) or hosts.data_url(key, small)
+    # the other style in the same mood peeks over the top-right edge of the bubble / report: drawn
+    # before it, so the card covers its lower half (no such picture = nothing)
+    chibi = hosts.data_url(key, small) if hosts.data_url(key, big) else ""
     # (cut off just under the card's top edge at y 170, so a short bubble never shows the chibi's feet)
     peek = (f'<div style="position:absolute;right:90px;top:24px;width:260px;height:156px;overflow:hidden">'
             f'<img src="{chibi}" style="display:block;margin:0 auto;height:290px;max-width:260px;object-fit:contain">'
