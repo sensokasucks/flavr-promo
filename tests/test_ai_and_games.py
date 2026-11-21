@@ -184,3 +184,41 @@ async def test_live_card_links_the_game_and_shows_genres():
     assert playing.startswith("[Valheim](https://store.steampowered.com/app/892970) · 🆕 NEW GAME")
     assert playing.endswith("*Survival · Adventure*")
     await bot.close()
+
+
+def test_parse_copes_with_chat_models():
+    # Sen 2026-11-21 (Gemma via KoboldCpp): the list one item per line, fences, thinking, a 2nd "["
+    assert kobold.parse('\n  "One line.",\n  "Two line."\n]\n') == ["One line.", "Two line."]
+    assert kobold.parse('```json\n["A.", "B."]\n```') == ["A.", "B."]
+    assert kobold.parse('<think>hmm</think>"Fine."]') == ["Fine."]
+    assert "\n" not in kobold.STOPS                     # a newline mustn't end the answer
+
+
+async def test_generate_sends_stops_and_keeps_the_raw_answer():
+    class Http:
+        def __init__(self):
+            self.json = None
+
+        def post(self, url, headers=None, timeout=None, json=None):
+            self.json = json
+            return FakeResp(200, {"results": [{"text": 'Sorry, here you go: none'}]})
+    h = Http()
+    k = kobold.Kobold(h, "http://k:5001", per_slot=5)
+    got = await k.generate("prompt")
+    assert got == "Sorry, here you go: none" and k.last_raw == got
+    assert h.json["stop_sequence"] == kobold.STOPS and h.json["max_length"] == 70 * 5 + 60
+
+
+def test_facts_name_every_game_for_kobold(tmp_path):
+    # owner 2026-11-21: KoboldCpp gets the games played (who, how many streams, the history tags)
+    from tests.test_hosts import FakeDiscord, world, ts
+    from flavrpromo.calendar_post import CalendarPoster
+    from flavrpromo.render import ImageCache
+    store = world()
+    p = CalendarPoster(store, FakeDiscord(), ImageCache(tmp_path), None, clock=lambda: ts(2026, 11, 20, 10, 5))
+    f = hosts.facts(store, p.build_review("flavr", "week"))
+    assert [g["game"] for g in f["games"]] == ["Schedule I", "Valheim"]
+    text = kobold.facts_text(f)
+    assert "games played: Schedule I (Lulu; 2 streams), Valheim (Sensoka; new game)" in text
+    assert kobold.games_text([{"game": "Peak", "people": ["Lulu"], "streams": 1, "tags": ["part:3"]}], True) == \
+        "games planned: Peak (Lulu; part 3)"

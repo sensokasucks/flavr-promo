@@ -139,7 +139,9 @@ def _day_lines(p: Dict[str, Any], week: Any, only: str = "") -> None:
         facts = {"when": f"{date:%A}", "when_lower": f"on {date:%A}", "count": len(tiles),
                  "first_name": first.name, "first_time": clock(first.at, week.tz)}
         p.setdefault("day_facts", {})[str(i)] = facts
-        names = ", ".join(dict.fromkeys(t.name for t in sorted(tiles, key=lambda t: t.at)))
+        # who, with the game when known ("Lulu: Valheim"), for KoboldCpp's day lines (owner 2026-11-21)
+        names = ", ".join(dict.fromkeys(f"{t.name}: {t.game}" if t.game else t.name
+                                        for t in sorted(tiles, key=lambda t: t.at)))
         p.setdefault("day_text", {})[str(i)] = (f"{date:%A}: {len(tiles)} stream{'' if len(tiles) == 1 else 's'} "
                                                 f"({names}), {first.name} first at {facts['first_time']}.")
         slot = f"day{i}"
@@ -208,7 +210,7 @@ async def ask_slot(poster: Any, p: Dict[str, Any], slot: str) -> str:
     have = (p.get("candidates") or {}).get(slot) or []
     new = [x for x in kobold.parse(got) if x not in have][:kob.per_slot]
     if not new:
-        return "KoboldCpp answered, but with no usable lines. Try ✨ again."
+        return f"KoboldCpp answered, but with no usable lines. Try ✨ again. Its answer: {got[:200]}"
     p["candidates"][slot] = new + have
     p["ai"] = list(p.get("ai") or []) + new
     p.setdefault("picks", {})[slot] = new[0]
@@ -382,6 +384,8 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
     hopts = "".join(f'<option value="{k}"{" selected" if k == p["host"] else ""}>{_e(x["emoji"])} {_e(x["name"])}</option>'
                     for k, x in hosts.HOSTS.items())
     ai_note = (f'<p class=ai>✨ KoboldCpp: {_e(host_picker.AI_STATES.get(p.get("ai_state") or "", "ready"))}</p>'
+               + (f'<pre class=help style="white-space:pre-wrap">{_e(p.get("ai_raw"))}</pre>'
+                  if p.get("ai_state") == "nolines" and p.get("ai_raw") else "")
                if ai_on else '<p class=help>Set a KoboldCpp address on <a href="/settings#kobold">Settings</a> for ✨ lines.</p>')
     built = time.strftime("%H:%M", time.localtime(float(p.get("built_at") or 0)))
     look = p.get("day_look", "host")
