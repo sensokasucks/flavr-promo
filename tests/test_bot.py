@@ -29,8 +29,8 @@ async def test_commands_register():
     me = next(c for c in bot.tree.get_commands() if c.name == "me")
     assert sorted(c.name for c in me.commands) == ["hide", "main", "posts", "schedule", "share", "signoff", "unschedule", "x"]
     friend = next(c for c in bot.tree.get_commands() if c.name == "friend")
-    assert sorted(c.name for c in friend.commands) == ["add", "drop", "edit", "group", "hide", "import", "list", "main",
-                                                       "remove", "schedule", "signoff", "unschedule", "x"]
+    assert sorted(c.name for c in friend.commands) == ["add", "drop", "edit", "game", "games", "group", "hide", "import",
+                                                       "list", "main", "remove", "schedule", "signoff", "unschedule", "x"]
     # /friend signoff and /me signoff (flavrpromo/signoff.py)
     for grp in (friend, me):
         so = next(c for c in grp.commands if c.name == "signoff")

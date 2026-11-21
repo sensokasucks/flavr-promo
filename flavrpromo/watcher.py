@@ -42,7 +42,7 @@ remembers {person id: when checked}. ``everyone=True`` (/calendar refresh by han
 
 What happens on a change is the bot's business (flavrpromo/bot.py ``LivePoster``): ``on_start``
 posts in the person's group channel and returns where, ``on_change`` edits it when the
-platforms or title change, ``on_end`` edits it to "was live" with the length and VOD. Sessions
+platforms, title or game change (games of one stream: flavrpromo/games.py), ``on_end`` edits it to "was live" with the length and VOD. Sessions
 are kept in the database (flavrpromo/store.py), which later rounds use for the weekly calendar.
 """
 
@@ -54,6 +54,7 @@ import logging
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
+from . import games
 from .store import PLATFORMS, Store
 
 log = logging.getLogger("flavrpromo.watcher")
@@ -331,12 +332,17 @@ class Watcher:
         if live_on:
             main = main_platform(person, live_on)
             info = live_on[main]
+            # the game: a platform's category, else a known game in the YouTube title (flavrpromo/games.py);
+            # nothing found keeps the one already on (an empty answer never ends a game)
+            game = games.detect(self.store, person, live_on, main) or (open_s or {}).get("game") or ""
             fields = {"last_seen": now, "platforms": sorted(live_on, key=PLATFORMS.index), "title": info.get("title", ""),
                       "links": {p: i.get("url", "") for p, i in live_on.items()},
-                      "url": info.get("url", ""), "thumb": info.get("thumb", ""), "game": info.get("game", ""),
+                      "url": info.get("url", ""), "thumb": info.get("thumb", ""), "game": game,
                       "viewers": sum(int(i.get("viewers") or 0) for i in live_on.values())}
             if open_s:
                 changed = (json.loads(open_s["platforms"]) != fields["platforms"] or open_s["title"] != fields["title"])
+                # a new game mid-stream: a new segment (with its history tag) and a card edit
+                changed = games.track(self.store, open_s["id"], person["id"], game, now) or changed
                 if person["id"] in self._gone:
                     # it was offline everywhere and came back inside RESTART_GRACE: same stream, one restart
                     self._gone.discard(person["id"])
@@ -353,11 +359,13 @@ class Watcher:
                 # (missed while the bot was down / a platform hadn't been checked yet). Reopen it.
                 fields.update(ended_at=None, vod_url="", vod_thumb="")
                 self.store.update_session(last["id"], **fields)
+                games.track(self.store, last["id"], person["id"], game, now)
                 if self.on_change:
                     await self.on_change(person, {**last, **fields}, live_on)
                 return
             sid = self.store.start_session(person["id"], started, **{k: v for k, v in fields.items() if k != "last_seen"})
             self.store.update_session(sid, last_seen=now)
+            games.track(self.store, sid, person["id"], game, started)     # the first game, tagged
             session = {**fields, "id": sid, "started_at": started, "restarts": 0}
             if self.on_start:
                 channel, message = await self.on_start(person, session, live_on)
@@ -371,6 +379,7 @@ class Watcher:
             ended = {"ended_at": float(open_s["last_seen"])}
             ended["vod_url"], ended["vod_thumb"] = await self.find_vod(person, open_s)
             self.store.update_session(open_s["id"], **ended)
+            games.finish(self.store, open_s["id"], ended["ended_at"])
             if self.on_end:
                 await self.on_end(person, {**open_s, **ended})
 

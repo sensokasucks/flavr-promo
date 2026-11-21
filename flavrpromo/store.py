@@ -20,6 +20,9 @@ Tables
             API; anyone else who doesn't use their platform's schedule).
   signoffs  each person's sign-off lines ("otsu-nuggies", optional emoji), several each; one is
             picked for their "was live" card (flavrpromo/signoff.py, /friend signoff, /me signoff).
+  segments  the games of one stream in order (flavrpromo/games.py): a stream that switches from
+            Valheim to Schedule I has two rows. tag is the history tag worked out when that game
+            started (NEW GAME / PART 8 / STAPLE / BACK AGAIN); ended_at stays empty while it's on.
   promo     the community calendar (flavrpromo/promo.py): streams members added from their self-promo
             posts. One row per stream: platform, what the link points at (item_key: a YouTube video
             id, a Twitch VOD id, or "<channel>@<time>" for a Twitch / Kick channel link), its state
@@ -163,6 +166,17 @@ CREATE TABLE IF NOT EXISTS signoffs (
   added_at REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS signoffs_person ON signoffs(person_id);
+CREATE TABLE IF NOT EXISTS segments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  game TEXT NOT NULL,
+  tag TEXT NOT NULL DEFAULT '',
+  started_at REAL NOT NULL,
+  ended_at REAL
+);
+CREATE INDEX IF NOT EXISTS segments_session ON segments(session_id);
+CREATE INDEX IF NOT EXISTS segments_person ON segments(person_id, started_at);
 """
 
 # Columns added after round 1. A database made by round 1 gets them on start (Store.__init__);
@@ -503,6 +517,50 @@ class Store:
             cur = self._db.execute("DELETE FROM manual_schedule WHERE person_id=?", (person_id,))
             self._db.commit()
             return cur.rowcount
+
+    # ── games within a stream (flavrpromo/games.py) ────────────────────
+    def segments(self, session_id: int) -> List[Dict[str, Any]]:
+        """One stream's games, in order."""
+        with self._lock:
+            return [dict(r) for r in self._db.execute(
+                "SELECT * FROM segments WHERE session_id=? ORDER BY started_at, id", (session_id,))]
+
+    def segment_add(self, session_id: int, person_id: int, game: str, at: float, tag: str = "") -> int:
+        with self._lock:
+            cur = self._db.execute("INSERT INTO segments(session_id, person_id, game, tag, started_at) VALUES(?,?,?,?,?)",
+                                   (session_id, person_id, game, tag, at))
+            self._db.commit()
+            return int(cur.lastrowid)
+
+    def segment_close(self, session_id: int, at: float) -> None:
+        """End the game that's on in this stream (if any) at ``at``."""
+        with self._lock:
+            self._db.execute("UPDATE segments SET ended_at=? WHERE session_id=? AND ended_at IS NULL", (at, session_id))
+            self._db.commit()
+
+    def game_history(self, person_id: int, before: float, skip_session: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Every (stream, game) this person played that started before ``before``: one row per game
+        per stream, {session_id, game, at}, oldest first. Streams from before games were tracked
+        (sessions.game, the last game the platform showed) count too."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT session_id, game, MIN(started_at) AS at FROM segments WHERE person_id=? AND started_at < ? "
+                "GROUP BY session_id, lower(game) "
+                "UNION SELECT s.id, s.game, s.started_at FROM sessions s WHERE s.person_id=? AND s.started_at < ? "
+                "AND s.game != '' AND NOT EXISTS (SELECT 1 FROM segments g WHERE g.session_id=s.id) "
+                "ORDER BY at", (person_id, before, person_id, before)).fetchall()
+        return [dict(r) for r in rows if r["session_id"] != skip_session]
+
+    def known_games(self, person_id: Optional[int] = None) -> List[str]:
+        """Game names seen so far (this person's when given, else everyone's), for matching YouTube titles."""
+        with self._lock:
+            if person_id is None:
+                q, args = "SELECT game FROM segments UNION SELECT game FROM sessions WHERE game != ''", ()
+            else:
+                q = ("SELECT game FROM segments WHERE person_id=? UNION "
+                     "SELECT game FROM sessions WHERE person_id=? AND game != ''")
+                args = (person_id, person_id)
+            return sorted({r["game"] for r in self._db.execute(q, args) if r["game"]})
 
     # ── sign-off lines (flavrpromo/signoff.py) ─────────────────────────
     def signoff_add(self, person_id: int, line: str, emoji: str = "") -> int:
