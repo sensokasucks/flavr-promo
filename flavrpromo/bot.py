@@ -90,7 +90,7 @@ from discord import app_commands
 from . import focus, sysinfo
 from .calendar import DAY_NAMES, REVIEW_NAMES
 from .config import Settings
-from . import gameinfo, games, host_picker, hosts, promo, signoff, talent
+from . import gameinfo, games, host_picker, host_webhooks, hosts, promo, signoff, talent
 from .pings import KINDS, Pinger, length
 from .share import X_STYLES
 from . import groups
@@ -183,6 +183,8 @@ class PromoBot(discord.Client):
         # the community calendar (flavrpromo/promo.py Promo); set by flavrpromo/__main__.py
         self.promo: Any = None
         self.game_info: Any = None          # flavrpromo/gameinfo.py GameInfo (IGDB; needs the Twitch keys)
+        # go-live cards posted as the host (flavrpromo/host_webhooks.py HostWebhooks); set by __main__.py
+        self.host_hooks: Any = None
         # set once Discord says we're in; the go-live watcher waits for it so its first posts don't get lost
         self.ready_event = asyncio.Event()
         self._register()
@@ -279,7 +281,9 @@ class PromoBot(discord.Client):
 
     # ── go-live posts (Watcher callbacks) ──────────────────────────────
     def live_embed(self, person: Dict[str, Any], session: Dict[str, Any],
-                   live_on: Dict[str, Dict[str, Any]]) -> discord.Embed:
+                   live_on: Dict[str, Dict[str, Any]], as_host: bool = False) -> discord.Embed:
+        """The go-live card. ``as_host``: posted through the host's webhook (their name and face are
+        the post's own, so the card leaves out its "Colette Cappuccino · Marketing" author line)."""
         main = main_platform(person, live_on)
         info = live_on.get(main) or {}
         e = discord.Embed(title=f"{person['name']} is live", description=session.get("title") or info.get("title") or "",
@@ -312,7 +316,7 @@ class PromoBot(discord.Client):
         # the host presenting this card (flavrpromo/hosts.py): name and job on top, their face when
         # a head or chibi picture was uploaded (hosts.face; sent with the first post as host.<ext>, kept on every edit)
         key = self._host_of(session)
-        if key:
+        if key and not as_host:
             h, face = hosts.HOSTS[key], hosts.face(key)
             e.set_author(name=f"{h['name']} · {h['role']}", icon_url=f"attachment://host{face.suffix}" if face else None)
         return e
@@ -342,11 +346,38 @@ class PromoBot(discord.Client):
 
     def _host_say(self, key: str, event: str, person: Dict[str, Any], game: str = "", tag: str = "",
                   length_s: float = 0, signoff_text: str = "") -> str:
-        """The message text above the card: "☕ **Colette Cappuccino:** <line>" (markdown in names escaped)."""
+        """The message text above the card: "☕ **Colette Cappuccino:** <line>" (markdown in names escaped).
+        A card posted as the host drops the "☕ **Name:**" part (``_unprefix``): the post shows who speaks."""
         esc = discord.utils.escape_markdown
         genre = gameinfo.genre_word(gameinfo.cached(self.store, game)) if game else ""
         line = hosts.live_line(key, event, esc(person["name"]), esc(game), tag, length_s, signoff_text, genre=genre)
         return f"{hosts.speaker(key)} {line}"[:2000] if line else ""
+
+    @staticmethod
+    def _unprefix(content: Optional[str]) -> Optional[str]:
+        """A host line without its "☕ **Name:** " speaker part (for posts made as the host)."""
+        for k in hosts.HOSTS:
+            pre = hosts.speaker(k) + " "
+            if content and content.startswith(pre):
+                return content[len(pre):]
+        return content
+
+    async def _post_as_host(self, channel: Any, key: str, content: Optional[str], person, session,
+                            live_on) -> Optional[Any]:
+        """Post the card through the host's webhook (flavrpromo/host_webhooks.py); None = couldn't,
+        so post_start posts it as the bot instead."""
+        if not key or self.host_hooks is None or not host_webhooks.enabled(self.store):
+            return None
+        wh = await self.host_hooks.get(channel, key)
+        if wh is None:
+            return None
+        try:
+            return await wh.send(content=self._unprefix(content) or discord.utils.MISSING,
+                                 embed=self.live_embed(person, session, live_on, as_host=True),
+                                 allowed_mentions=NO_PINGS, wait=True)
+        except discord.HTTPException as e:
+            log.info("go-live post as %s in %s failed, posting as the bot: %s", key, channel.id, e)
+            return None
 
     async def post_start(self, person, session, live_on) -> Tuple[str, str]:
         """The go-live card, in every place talent.live_channels picks: the group's live channel and
@@ -374,8 +405,9 @@ class PromoBot(discord.Client):
             if channel is None:
                 continue
             try:
-                msg = await channel.send(content=content, embed=self.live_embed(person, session, live_on),
-                                         files=self._host_face(key), allowed_mentions=NO_PINGS)
+                msg = await self._post_as_host(channel, key, content, person, session, live_on) or \
+                    await channel.send(content=content, embed=self.live_embed(person, session, live_on),
+                                       files=self._host_face(key), allowed_mentions=NO_PINGS)
             except discord.HTTPException as e:
                 log.warning("go-live post in %s failed: %s", channel_id, e)
                 continue
@@ -427,7 +459,19 @@ class PromoBot(discord.Client):
     async def _edit(self, msg: discord.Message, **kw: Any) -> None:
         """Edit one go-live card; a card that can't be edited is skipped. That's a card FlaVR Bot posted
         before the split (2026-11-20): bots can only edit their own messages, so a stream that was live
-        during the switch keeps its old card as it was."""
+        during the switch keeps its old card as it was. A card posted as the host is edited through that
+        host's webhook (only it may), without the speaker part and the card's author line."""
+        wh = await self.host_hooks.owner_of(msg) if self.host_hooks is not None else None
+        if wh is not None:
+            if "content" in kw:
+                kw["content"] = self._unprefix(kw["content"])
+            if kw.get("embed") is not None:
+                kw["embed"].remove_author()
+            try:
+                await wh.edit_message(msg.id, allowed_mentions=NO_PINGS, **kw)
+            except discord.HTTPException as e:
+                log.info("couldn't edit a host's go-live card: %s", e)
+            return
         if self.user is not None and msg.author.id != self.user.id:
             return
         try:
