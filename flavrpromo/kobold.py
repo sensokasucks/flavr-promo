@@ -60,6 +60,9 @@ ASKS = {
     "desk_signoff": "Write one short sign-off line (you are leaving your desk).",
     # the article editor's day pictures (flavrpromo/article_editor.py ``ask_slot``; the facts are that day's)
     "day": "Write one line for this day's picture about who streams and when (one to three sentences).",
+    # the tall pictures' stream and game chunks (flavrpromo/recipes.py ``write_line``; the facts are that stream's / game's)
+    "stream": "Write one short remark about this stream for its spot in the picture (one or two sentences).",
+    "game": "Write one short remark about this game being played this week (one or two sentences).",
 }
 
 

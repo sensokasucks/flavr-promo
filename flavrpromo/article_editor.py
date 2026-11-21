@@ -11,6 +11,9 @@ and the owner's own text sections. For each section the owner can:
   * Regen: a calendar section is built again from the latest calendar (new streams, VODs, titles);
     a host section gets its template lines shuffled and, with KoboldCpp set up, new ✨ lines asked
     for in the background (flavrpromo/host_picker.py ``start_ai``, only that section's slots);
+  * "+ Add a tall section" (flavrpromo/recipes.py): a ready-made tall picture for the games of the week, one
+    day in detail or one person's week, split over several pictures when it is long; its ✨ has KoboldCpp
+    write each stream's / game's remark. "+ Add a tall picture" below is the empty stack to build by hand.
   * "+ Add a tall picture": a tall section built from chunks (header, host moment, stream, stats, a
     day's pictures ...), each set with menus on its own builder page (flavrpromo/tall_page.py, picture
     drawn by flavrpromo/tall.py, at most 1600 x 2133 so X shows it whole); drafts keep them in p["talls"];
@@ -60,7 +63,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from . import groups, host_cards, host_picker, hosts, kobold, tall
+from . import groups, host_cards, host_picker, hosts, kobold, recipes, tall
 from .render import COVER_H, COVER_W, clock
 from .settings_page import _e, frame
 from .web import article_html, article_query, build_article, get_week
@@ -398,7 +401,7 @@ def _host_controls(dkey: str, p: Dict[str, Any], sid: str, ai_on: bool) -> str:
             f'</label>{swap}<p>{ai}</p></div></div>')
 
 
-def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
+def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any = None) -> str:
     ai_on = getattr(poster, "kobold", None) is not None
     secs = []
     last = len(p["sections"]) - 1
@@ -424,7 +427,9 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
             body = _host_controls(dkey, p, sid, ai_on) + f'<div class=box>{section_html(dkey, p, s)}</div>'
         elif kind == "tall":
             n = len(p["talls"][sid]["chunks"])
-            buttons += (f'<button name=action value="remove:{sid}" class=alt>Remove</button>')
+            buttons += ((f'<button name=action value="aitall:{sid}" class=alt>✨ Write remarks</button> '
+                         if ai_on and any(c["type"] in recipes.LINE_TYPES for c in p["talls"][sid]["chunks"]) else "")
+                        + f'<button name=action value="remove:{sid}" class=alt>Remove</button>')
             body = (f'<p><a class=btn href="/settings/tall?d={quote(dkey)}&t={sid}">🧱 Edit the chunks ({n}, '
                     f'{tall.total(p["talls"][sid]["chunks"])} px tall)</a></p><div class=box>{section_html(dkey, p, s)}</div>')
         else:
@@ -459,7 +464,7 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
     head = (f'<p>Host <select name=host>{hopts}</select> <button name=action value=host class=alt>Change host</button> '
             f'<small>Changing the host gives new lines for both host sections and the day pictures.</small></p>'
             f'<p>Day pictures <select name=day_look>{lopts}</select> <select name=day_layout>{alls}</select> <button name=action value=save class=alt>Apply</button></p>{cover}{ai_note}'
-            f'{_variation_picker(p)}'
+            f'{_variation_picker(p)}{_recipe_row(week, poster.store)}'
             f'<p class=help>Calendar sections are as of {built}. <button name=action value=regen_all class=alt>↻ Regen every '
             f'calendar section</button> <button name=action value=add_text class=alt>+ Add a text section</button> '
             f'<button name=action value=reset class=alt>Start over</button></p>')
@@ -490,6 +495,27 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
              "if(b&&/^(ask|ai):/.test(b.value)){b.textContent='✨ writing… (up to a minute)';"
              "setTimeout(()=>document.querySelectorAll('button').forEach(x=>x.disabled=true),0)}});</script>")
     return frame("Article editor", "📰 Article editor", body, saved, style)
+
+
+def _recipe_row(week: Any, store: Any = None) -> str:
+    """"+ Add a tall section": pick a recipe (flavrpromo/recipes.py), the day or the person it needs and
+    straight or diagonal seams; the menus for the other recipes are ignored."""
+    if week is None:
+        return ""
+    o = lambda items: "".join(f'<option value="{_e(v)}">{_e(n)}</option>' for v, n in items)  # noqa: E731
+    days = [(str(i), f"{week.date_of(i).strftime('%A')} ({len(week.days[i])})") for i in range(len(week.days))]
+    return (f'<p class=recipe><b>+ Add a tall section</b> <select name=recipe>{o(recipes.RECIPES.items())}</select> '
+            f'<label>day <select name=recipe_day>{o(days)}</select></label> '
+            f'<label>person <select name=recipe_person>{o((n, n) for n in recipes.people(week))}</select></label> '
+            f'<select name=recipe_seams>{o([("", "straight seams"), ("diagonal", "diagonal seams")])}</select> '
+            f'<button name=action value=add_recipe class=alt>Build it</button> '
+            f'<small>(day / person only matter for that recipe; edit the chunks afterwards)</small></p>'
+            # a tall picture from a stack: a built-in one or one you saved in the builder (this week's streams / games go in)
+            f'<p class=recipe><b>+ Add a tall picture</b> <select name=tall_stack>'
+            + o([(f"b:{n}", f"{n} (built-in)") for n in tall.BUILTIN]
+                + [(f"t:{n}", n) for n in sorted((store.get(tall.TEMPLATES_KEY) if store else None) or {})])
+            + '</select> <button name=action value=add_tall class=alt>Add it</button> '
+            '<small>(save your own stacks in the builder with "Save stack")</small></p>')
 
 
 def _variation_picker(p: Dict[str, Any]) -> str:
@@ -602,7 +628,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
         group = groups.find(request.query.get("group", "")) or "flavr"
         which = _which(request.query.get("which", ""))[0]
         dkey, p = await _load(group, which)
-        return web.Response(text=page(poster, dkey, p, request.query.get("saved", "")), content_type="text/html")
+        week, _ = await _article(poster, p)
+        return web.Response(text=page(poster, dkey, p, request.query.get("saved", ""), week), content_type="text/html")
 
     def _back(p: Dict[str, Any], note: str, anchor: str = "") -> web.HTTPSeeOther:
         return web.HTTPSeeOther(f"/settings/article?group={quote(p['group'])}&which={quote(p['which'])}"
@@ -636,10 +663,36 @@ def add_routes(app: web.Application, poster: Any) -> None:
         elif verb == "add_tall":
             n = 1 + max([int(k[4:]) for k in (p.get("talls") or {}) if k[4:].isdigit()] or [0])
             sid = f"tall{n}"
-            p.setdefault("talls", {})[sid] = {"chunks": tall.renumber(tall.BUILTIN["Week overview"])}
+            kind, _, name = str(form.get("tall_stack") or "b:Week overview").partition(":")
+            src = (tall.BUILTIN.get(name) if kind == "b" else (store.get(tall.TEMPLATES_KEY) or {}).get(name)) \
+                or tall.BUILTIN["Week overview"]
+            week, _ = await _article(poster, p)
+            p.setdefault("talls", {})[sid] = {"chunks": tall.renumber(src)}
+            recipes.fill(p["talls"][sid]["chunks"], p, week)
             at = next((i for i, s in enumerate(p["sections"]) if s["id"] == "outro"), len(p["sections"]))
-            p["sections"].insert(at, {"id": sid, "title": f"Tall picture {n}", "on": True})
+            p["sections"].insert(at, {"id": sid, "title": f"Tall picture {n}" if not name or name == "Week overview" else name, "on": True})
             note, anchor = "Added a tall picture (before the outro). Open its chunks to build it.", sid
+        elif verb == "add_recipe":
+            week, _ = await _article(poster, p)
+            which_recipe = str(form.get("recipe") or "")
+            arg = str(form.get("recipe_day") if which_recipe == "day" else form.get("recipe_person") or "")
+            built, err = recipes.build(which_recipe, p, week, arg, str(form.get("recipe_seams") or "") == "diagonal")
+            if err:
+                note = err
+            else:
+                ids = recipes.add_to_draft(p, built)
+                note = (f"Added {len(ids)} tall section{'' if len(ids) == 1 else 's'} (before the outro). "
+                        f"Open the chunks to change them; ✨ writes the remarks.")
+                anchor = ids[0]
+        elif verb == "aitall" and sid in (p.get("talls") or {}):
+            week, _ = await _article(poster, p)
+            store.put(dkey, p)                  # keep this page's edits; the writer re-reads the draft
+            if recipes.start_lines(poster, dkey, sid, week):
+                p["talls"][sid]["ai_state"] = "writing"     # the save below must not wipe what start_lines set
+            note = ("KoboldCpp is writing the empty remarks; refresh in a minute or two."
+                    if p["talls"][sid].get("ai_state") == "writing" else
+                    "KoboldCpp isn't set up." if getattr(poster, "kobold", None) is None else
+                    "KoboldCpp is still writing; refresh in a minute.")
         elif verb == "add_text":
             n = 1 + max([int(k[4:]) for k in (p.get("texts") or {}) if k[4:].isdigit()] or [0])
             sid = f"text{n}"
