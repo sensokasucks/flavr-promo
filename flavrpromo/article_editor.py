@@ -11,6 +11,9 @@ and the owner's own text sections. For each section the owner can:
   * Regen: a calendar section is built again from the latest calendar (new streams, VODs, titles);
     a host section gets its template lines shuffled and, with KoboldCpp set up, new ✨ lines asked
     for in the background (flavrpromo/host_picker.py ``start_ai``, only that section's slots);
+  * "+ Add a tall picture": a tall section built from chunks (header, host moment, stream, stats, a
+    day's pictures ...), each set with menus on its own builder page (flavrpromo/tall_page.py, picture
+    drawn by flavrpromo/tall.py, at most 1600 x 2133 so X shows it whole); drafts keep them in p["talls"];
   * ✨ beside one line: KoboldCpp rewrites just that line (``redo_line``, one request), in place;
   * host sections: pick one of the lines (or type their own) and the picture: the opener card (with
     the regular / chibi switch: which one is big and which one peeks), the desk card (regular or
@@ -57,7 +60,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from . import groups, host_cards, host_picker, hosts, kobold
+from . import groups, host_cards, host_picker, hosts, kobold, tall
 from .render import COVER_H, COVER_W, clock
 from .settings_page import _e, frame
 from .web import article_html, article_query, build_article, get_week
@@ -165,6 +168,7 @@ def migrate(p: Dict[str, Any]) -> Dict[str, Any]:
     p.setdefault("cover_figure", "happy")
     p.setdefault("seed", int(p.get("built_at") or 0))    # which pool picture each kind shows (hosts.look)
     p.setdefault("pins", {})                              # {picture kind: pool picture id} chosen by hand
+    p.setdefault("talls", {})                             # {section id "tall1": {"chunks": [...]}} (flavrpromo/tall.py)
     return p
 
 
@@ -265,7 +269,7 @@ def _refresh(p: Dict[str, Any], a: Dict[str, Any], only: str = "") -> str:
             return f"“{sec['title']}” isn't in the article any more (nothing there now); left as it was."
         sec.update(title=fresh[only]["title"], html=fresh[only]["html"])
         return f"Rebuilt “{sec['title']}” from the calendar."
-    mine = {"intro", "outro"} | set(p.get("texts") or {})
+    mine = {"intro", "outro"} | set(p.get("texts") or {}) | set(p.get("talls") or {})
     out = []
     for s in p["sections"]:
         if s["id"] in mine:
@@ -314,6 +318,10 @@ def section_html(dkey: str, p: Dict[str, Any], s: Dict[str, Any]) -> str:
         # the snapshot's board-look day picture (/calendar/day.png...day=N) → the host's look
         url = f"/settings/article/day?d={quote(dkey)}&day={sid[3:]}&t={int(p.get('saved_at') or 0)}"
         return re.sub(r'/calendar/day\.png[^"]*?day=\d', html.escape(url, quote=True), s.get("html") or "")
+    if sid in (p.get("talls") or {}):
+        url = html.escape(f"/settings/tall/picture?d={quote(dkey)}&t={sid}&v={int(p.get('saved_at') or 0)}", quote=True)
+        return (f'<div class="nocopy"><img src="{url}" alt="tall picture">'
+                f'<p>Tall picture · <a href="{url}" download="{sid}.png">Save</a> · put it here with X\'s picture button</p></div>')
     if sid in (p.get("texts") or {}):
         paras = [x.strip() for x in str(p["texts"][sid]).split("\n\n") if x.strip()]
         return "".join(f"<p>{html.escape(x).replace(chr(10), '<br>')}</p>" for x in paras)
@@ -396,7 +404,8 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
     last = len(p["sections"]) - 1
     for i, s in enumerate(p["sections"]):
         sid = s["id"]
-        kind = "host" if sid in HOST_SECTIONS else "text" if sid in (p.get("texts") or {}) else "calendar"
+        kind = ("host" if sid in HOST_SECTIONS else "text" if sid in (p.get("texts") or {})
+                else "tall" if sid in (p.get("talls") or {}) else "calendar")
         buttons = (f'<button name=action value="up:{sid}" class=alt{" disabled" if i == 0 else ""}>↑</button> '
                    f'<button name=action value="down:{sid}" class=alt{" disabled" if i == last else ""}>↓</button> ')
         if kind == "calendar":
@@ -413,6 +422,11 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "") -> str:
         elif kind == "host":
             buttons += f'<button name=action value="regen:{sid}">↻ New lines</button>'
             body = _host_controls(dkey, p, sid, ai_on) + f'<div class=box>{section_html(dkey, p, s)}</div>'
+        elif kind == "tall":
+            n = len(p["talls"][sid]["chunks"])
+            buttons += (f'<button name=action value="remove:{sid}" class=alt>Remove</button>')
+            body = (f'<p><a class=btn href="/settings/tall?d={quote(dkey)}&t={sid}">🧱 Edit the chunks ({n}, '
+                    f'{tall.total(p["talls"][sid]["chunks"])} px tall)</a></p><div class=box>{section_html(dkey, p, s)}</div>')
         else:
             buttons += f'<button name=action value="remove:{sid}" class=alt>Remove</button>'
             body = (f'<textarea name="text_{sid}" rows=4 maxlength={MAX_TEXT} placeholder="Your own words. '
@@ -615,6 +629,17 @@ def add_routes(app: web.Application, poster: Any) -> None:
             p["texts"].pop(sid)
             p["sections"] = [s for s in p["sections"] if s["id"] != sid]
             note, anchor = "Text section removed.", ""
+        elif verb == "remove" and sid in (p.get("talls") or {}):
+            p["talls"].pop(sid)
+            p["sections"] = [s for s in p["sections"] if s["id"] != sid]
+            note, anchor = "Tall picture removed.", ""
+        elif verb == "add_tall":
+            n = 1 + max([int(k[4:]) for k in (p.get("talls") or {}) if k[4:].isdigit()] or [0])
+            sid = f"tall{n}"
+            p.setdefault("talls", {})[sid] = {"chunks": tall.renumber(tall.BUILTIN["Week overview"])}
+            at = next((i for i, s in enumerate(p["sections"]) if s["id"] == "outro"), len(p["sections"]))
+            p["sections"].insert(at, {"id": sid, "title": f"Tall picture {n}", "on": True})
+            note, anchor = "Added a tall picture (before the outro). Open its chunks to build it.", sid
         elif verb == "add_text":
             n = 1 + max([int(k[4:]) for k in (p.get("texts") or {}) if k[4:].isdigit()] or [0])
             sid = f"text{n}"

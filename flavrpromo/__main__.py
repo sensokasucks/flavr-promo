@@ -22,7 +22,7 @@ from pathlib import Path
 import aiohttp
 import discord
 
-from . import article_editor, card_page, command_forms, config, groups, host_picker, hosts, settings_page
+from . import article_editor, card_page, command_forms, config, groups, host_picker, hosts, settings_page, tall_page
 from .bot import PromoBot
 from .calendar_post import CalendarPoster
 from .import_old import maybe_import
@@ -111,6 +111,7 @@ async def main() -> int:
         # command (command_forms.py, runs them as the owner through poster.discord = the bot)
         server.extra_routes.append(lambda app: card_page.add_routes(app, poster))
         server.extra_routes.append(lambda app: article_editor.add_routes(app, poster))
+        server.extra_routes.append(lambda app: tall_page.add_routes(app, poster))     # tall picture builder
         server.extra_routes.append(lambda app: command_forms.add_routes(app, poster))
         # game genres / summary / store link from IGDB with the Twitch keys (flavrpromo/gameinfo.py)
         bot.game_info = GameInfo(store, checkers["twitch"])
