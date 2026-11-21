@@ -52,7 +52,7 @@ up to an hour to show the first time):
   Hosts Colette and Clark (flavrpromo/hosts.py, host_cards.py, host_picker.py; owner or Manage Server)
     /host setup on [only]   hosts on / off; only = always one host (else turns, never 3 in a row).
                         On: a host line above go-live cards, and reviews wait for picks on /hosts/pick
-    /host picture host kind file   upload a pose (happy, pointing, sleepy), desk or head picture
+    /host picture host kind file   upload a pose (happy, pointing, sleepy), desk, head or chibi picture
     /host list | preview host review card [group]   which pictures exist; draw an opener / desk card
   Community calendar (flavrpromo/promo.py): streams members add from their self-promo posts
     message menu (long-press / right-click a post → Apps) "Add to community calendar" and
@@ -303,10 +303,10 @@ class PromoBot(discord.Client):
             e.timestamp = datetime.fromtimestamp(float(session["started_at"]))
             e.set_footer(text="Started")
         # the host presenting this card (flavrpromo/hosts.py): name and job on top, their face when
-        # /host picture head was uploaded (sent with the first post as host.<ext>, kept on every edit)
+        # a head or chibi picture was uploaded (hosts.face; sent with the first post as host.<ext>, kept on every edit)
         key = self._host_of(session)
         if key:
-            h, face = hosts.HOSTS[key], hosts.picture(key, "head")
+            h, face = hosts.HOSTS[key], hosts.face(key)
             e.set_author(name=f"{h['name']} · {h['role']}", icon_url=f"attachment://host{face.suffix}" if face else None)
         return e
 
@@ -319,8 +319,8 @@ class PromoBot(discord.Client):
 
     @staticmethod
     def _host_face(key: str) -> List[discord.File]:
-        """The host's head picture as a fresh attachment (a discord.File can only be sent once)."""
-        face = hosts.picture(key, "head") if key else None
+        """The host's face (head, else chibi) as a fresh attachment (a discord.File can only be sent once)."""
+        face = hosts.face(key) if key else None
         return [discord.File(str(face), filename=f"host{face.suffix}")] if face else []
 
     def _host_say(self, key: str, event: str, person: Dict[str, Any], game: str = "", tag: str = "",
@@ -1097,9 +1097,12 @@ class PromoBot(discord.Client):
         kind_choices = [app_commands.Choice(name=n, value=k) for k, n in
                         [("happy", "Pose: happy (busy weeks)"), ("pointing", "Pose: pointing (a new game)"),
                          ("sleepy", "Pose: sleepy (quiet weeks)"), ("desk", "Desk (the sign-off card)"),
-                         ("head", "Head (small face on go-live cards)")]]
+                         ("head", "Head (small face on go-live cards)"),
+                         ("chibi_happy", "Chibi: happy (opener corner, day posts, face)"),
+                         ("chibi_pointing", "Chibi: pointing (a new game)"),
+                         ("chibi_sleepy", "Chibi: sleepy (quiet weeks)")]]
 
-        @host_cmd.command(name="picture", description="Upload a host's picture (a pose, their desk or their head)")
+        @host_cmd.command(name="picture", description="Upload a host's picture (a pose, their desk, their head or a chibi)")
         @app_commands.choices(host=host_choices, kind=kind_choices)
         @app_commands.describe(kind="Which picture this is", file="PNG, JPG or WebP, up to 8 MB (see-through PNG is best)")
         async def host_picture(inter: discord.Interaction, host: app_commands.Choice[str],

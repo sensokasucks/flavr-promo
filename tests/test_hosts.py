@@ -239,3 +239,57 @@ async def test_live_card_host_lines(monkeypatch):
     assert "otsu" in end["content"]
     assert not any("otsu" in str(f.value) for f in end["embed"].fields)      # not said twice
     await bot.close()
+
+
+def test_chibis_fall_back_and_make_the_face(tmp_path):
+    hosts.init(tmp_path)
+    try:
+        assert hosts.face("clark") is None
+        assert hosts.save_picture("clark", "chibi_sleepy", b"PNG", "c.png") == ""
+        assert hosts.picture("clark", "chibi_happy").name == "chibi_sleepy.png"     # another chibi
+        assert hosts.picture("clark", "happy") is None                              # never a chibi for a pose
+        assert hosts.face("clark").name == "chibi_sleepy.png"                       # no head: the chibi
+        assert hosts.save_picture("clark", "head", b"PNG", "h.png") == ""
+        assert hosts.face("clark").name == "head.png"
+        page = host_cards.opener("clark", "Week in Review", "Nov 16 - 19", "hi", [], [], "sleepy")
+        assert page.count("data:image/png;base64,") == 1                            # the chibi peeking
+    finally:
+        hosts.init(None)
+
+
+def test_day_lines():
+    rng = random.Random(2)
+    one = hosts.day_line("clark", "Today", 1, "Lulu", "8 PM", rng)
+    assert "Lulu" in one and "{" not in one
+    many = hosts.day_line("colette", "This weekend", 4, "Lulu", "Fri 8 PM", rng)
+    assert "{" not in many and ("4" in many or "Lulu" in many)
+
+
+def test_day_picture_host_corner_or_badge():
+    from flavrpromo.calendar import Tile
+    from flavrpromo.render import tiles_card
+    host = {"chibi": "", "line": "Two <b>streams</b> today!", "accent": "#e0782e"}
+    tile = Tile(kind="scheduled", name="Lulu", at=ts(2026, 11, 20, 20))
+    few = tiles_card("flavr", "TODAY", [tile], TZ, lambda u: "", host=host)
+    assert 'class="hb"' in few and "Two &lt;b&gt;streams" in few                    # big bubble in the free space
+    many = tiles_card("flavr", "TODAY", [tile] * 12, TZ, lambda u: "", host=host)
+    assert 'class="hb"' not in many and 'class="hs"' in many                       # header badge when full
+    assert "<span>1 stream</span>" in tiles_card("flavr", "TODAY", [tile], TZ, lambda u: "")   # no host: the count
+
+
+async def test_day_post_has_the_host(tmp_path):
+    from flavrpromo import focus
+    store = Store(":memory:")
+    lulu = store.add_person("Lulu", "flavr")
+    store.add_account(lulu, "youtube", "@lulu")
+    clock = {"t": ts(2026, 11, 20, 10, 5)}
+    d = FakeDiscord()
+    p = CalendarPoster(store, d, ImageCache(tmp_path), None, clock=lambda: clock["t"])
+    store.replace_scheduled(lulu, "youtube", [{"key": "v", "at": ts(2026, 11, 20, 20)}], now=clock["t"])
+    store.put("day_posts.flavr", {"channel": "77", "today": 600, "tomorrow": None, "weekend": None, "weekend_day": 5})
+    store.put("hosts_on", True)
+    store.put("hosts_only", "clark")
+    await focus.tick(p)
+    sent = [s for s in d.sent if s[0] == "77"]
+    assert len(sent) == 1 and sent[0][3].startswith("🍎 **Clark:**") and "Lulu" in sent[0][3]
+    assert store.get("day_post.flavr.today")["host"]["key"] == "clark"

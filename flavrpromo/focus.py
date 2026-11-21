@@ -27,6 +27,8 @@ Two ways to get one:
     VOD link), like the weekly board: on a change, and every LIVE_REDRAW while someone is live.
     With the /pings switch "share" on, each automatic post is followed by the copy-ready share
     DM for those days (held during quiet hours), like the weekly post.
+    With hosts on (/host setup on, flavrpromo/hosts.py) a host presents each automatic post: their
+    line on top of the text and their chibi in the picture (``host_for``; kept on every edit).
 
 Share: ``share`` / ``as_week`` give /calendar share's `when` option the same copy-ready Discord and X
 texts as the weekly share (flavrpromo/share.py), for just those days. The X Article style needs a
@@ -35,7 +37,7 @@ whole week's page, so focus shares fall back to the "post + links reply" style.
 Saved in kv:
   day_posts.<group>        {channel, today, tomorrow, weekend, weekend_day}   (/setup day-posts; the
                            three times are minutes after midnight in TZ or None = off; weekend_day 0 = Sunday)
-  day_post.<group>.<kind>  {key, label, dates, channel, message, sig, drawn_at, until}  kind = today /
+  day_post.<group>.<kind>  {key, label, dates, channel, message, sig, drawn_at, until, host}  kind = today /
                            tomorrow / weekend; ``key`` = the first date (ISO), so each posts once
 
 Who calls it: CalendarPoster.tick (flavrpromo/calendar_post.py) runs ``tick`` every minute inside its
@@ -51,9 +53,9 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from . import groups
+from . import groups, hosts
 from .calendar import Tile, Week
-from .render import logo_data_url, tiles_card
+from .render import clock, logo_data_url, tiles_card
 
 log = logging.getLogger("flavrpromo.focus")
 
@@ -130,8 +132,28 @@ def title(f: Focus, who: str = "") -> str:
     return f"{f.label} {joiner} {groups.name(f.group)} · {f.date_text}"
 
 
-def embed(f: Focus, who: str = "") -> Dict[str, Any]:
-    """The post's text as embed data (flavrpromo/bot.py make_embed): one field per day."""
+def host_for(store: Any, f: Focus) -> Dict[str, str]:
+    """An automatic day post's host and line when hosts are on (/host setup on): {"key", "line"}, else
+    {}. Chosen once when the post is made and kept in its kv row, so every edit shows the same host."""
+    if not hosts.enabled(store) or not f.tiles():
+        return {}
+    key = hosts.choose(store)
+    t = f.tiles()[0]
+    when = (f"{datetime.fromtimestamp(t.at, f.tz):%a} " if len(f.dates) > 1 else "") + clock(t.at, f.tz)
+    return {"key": key, "line": hosts.day_line(key, f.label, len(f.tiles()), t.name, when)}
+
+
+def host_picture(host: Dict[str, str]) -> Optional[Dict[str, str]]:
+    """``host_for``'s answer as flavrpromo/render.py tiles_card wants it (chibi picture, line, colour)."""
+    key = host.get("key") or ""
+    if key not in hosts.HOSTS or not host.get("line"):
+        return None
+    return {"chibi": hosts.data_url(key, "chibi_happy"), "line": host["line"], "accent": hosts.HOSTS[key]["accent"]}
+
+
+def embed(f: Focus, who: str = "", host: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """The post's text as embed data (flavrpromo/bot.py make_embed): one field per day, with the host's
+    line on top when the post has one (``host_for``)."""
     from .calendar_post import line         # late import: calendar_post imports this module
     fields: List[Tuple[str, str]] = []
     for d, tiles in zip(f.dates, f.days):
@@ -151,18 +173,21 @@ def embed(f: Focus, who: str = "") -> Dict[str, Any]:
                             "footer": "Times below are in your own time zone"}
     if not f.tiles():
         data["description"] = "Nothing on the calendar yet."
+    elif host and host.get("key") in hosts.HOSTS and host.get("line"):
+        data["description"] = f"{hosts.speaker(host['key'])} {host['line']}"
     return data
 
 
-async def png(poster: Any, f: Focus) -> Optional[bytes]:
-    """The picture, or None without Chromium (the post goes out as text then)."""
+async def png(poster: Any, f: Focus, host: Optional[Dict[str, str]] = None) -> Optional[bytes]:
+    """The picture, or None without Chromium (the post goes out as text then). ``host``: ``host_for``."""
     if poster.shooter is None:
         return None
     try:
         await poster.images.fetch_all(f)        # ImageCache only reads .tiles()
         heading = f"{f.label} · {f.date_text}".upper()
         return await poster.shooter.png(tiles_card(f.group, heading, f.tiles(), f.tz, poster.images.data_url,
-                                                   logo_data_url(), show_day=len(f.dates) > 1))
+                                                   logo_data_url(), show_day=len(f.dates) > 1,
+                                                   host=host_picture(host or {})))
     except Exception as e:
         log.warning("focus picture failed: %s", e)
         return None
@@ -203,12 +228,13 @@ async def tick(poster: Any) -> None:
             f = build(poster, g, label, dates)
             post = {"key": dates[0].isoformat()}
             if f.tiles():                                       # no "nothing on" posts
-                pic = await png(poster, f)
-                msg = await poster.discord.cal_send(s["channel"], embed(f), pic, f"{kind}-{post['key']}.png")
+                host = host_for(poster.store, f)
+                pic = await png(poster, f, host)
+                msg = await poster.discord.cal_send(s["channel"], embed(f, host=host), pic, f"{kind}-{post['key']}.png")
                 if not msg:
                     continue                                    # try again next minute
                 end = dates[-1] + timedelta(days=1)
-                post.update(label=label, dates=[d.isoformat() for d in dates], channel=s["channel"], message=str(msg),
+                post.update(label=label, dates=[d.isoformat() for d in dates], channel=s["channel"], message=str(msg), host=host,
                             sig=f.signature(), drawn_at=now,
                             until=datetime(end.year, end.month, end.day, tzinfo=poster.tz).timestamp())
                 poster._share_later(as_week(f), pic)            # the share DM, when /pings share is on
@@ -258,8 +284,9 @@ async def _edit(poster: Any, group: str, key: str, post: Dict[str, Any], final: 
     sig = f.signature()
     stale = any(t.kind == "live" for t in f.tiles()) and now - float(post.get("drawn_at") or 0) >= LIVE_REDRAW
     if sig != post.get("sig") or stale:
-        pic = await png(poster, f)
-        ok = await poster.discord.cal_edit(post["channel"], post["message"], embed(f), pic, "focus.png")
+        host = post.get("host") or {}
+        pic = await png(poster, f, host)
+        ok = await poster.discord.cal_edit(post["channel"], post["message"], embed(f, host=host), pic, "focus.png")
         if not ok:
             poster.store.put(key, {"key": post.get("key")})     # deleted: don't make a new one for these days
             return

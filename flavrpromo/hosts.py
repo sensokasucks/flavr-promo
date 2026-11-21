@@ -9,8 +9,10 @@ This file holds who the hosts are, their pictures, which one presents a post, an
     cream paper. Card layouts are in flavrpromo/host_cards.py.
   * Pictures are the owner's own art, so they are NOT in git: DATA_DIR/hosts/<host>/<kind>.png
     (or .jpg / .webp), uploaded from Discord with /host picture. Kinds: happy, pointing, sleepy
-    (poses for the opener), desk (the sign-off card) and head (the small face on go-live cards).
-    A missing pose falls back to any other pose; no pictures at all still works (text only).
+    (poses for the opener), desk (the sign-off card), head (the small face on go-live cards) and
+    chibi_happy / chibi_pointing / chibi_sleepy (chibi versions: peeking over the opener card, the
+    go-live face when there's no head, and on day posts). A missing pose falls back to another pose,
+    a missing chibi to another chibi; no pictures at all still works (text only).
   * Which host: random per post, but never the same one three times in a row (kv host_last), or
     always one when the owner picks it (/host setup only:). Off until /host setup on (kv hosts_on),
     so other groups running their own copy see no change until they add hosts.
@@ -41,8 +43,9 @@ HOSTS: Dict[str, Dict[str, str]] = {
     "colette": {"name": "Colette Cappuccino", "role": "Marketing", "emoji": "☕", "accent": "#f72ca2"},
     "clark": {"name": "Clark", "role": "Division Clerk", "emoji": "🍎", "accent": "#e0782e"},
 }
-KINDS = ("happy", "pointing", "sleepy", "desk", "head")
+KINDS = ("happy", "pointing", "sleepy", "desk", "head", "chibi_happy", "chibi_pointing", "chibi_sleepy")
 POSES = ("happy", "pointing", "sleepy")
+CHIBIS = ("chibi_happy", "chibi_pointing", "chibi_sleepy")     # the same three moods, small (Sen 2026-11-21)
 EXTS = (".png", ".jpg", ".jpeg", ".webp")
 MAX_PICTURE = 8 * 1024 * 1024       # bytes; one uploaded picture
 LONG_STREAM = 4 * 3600.0            # a stream this long gets the "long stream" end line (s)
@@ -82,12 +85,18 @@ def picture(key: str, kind: str) -> Optional[Path]:
     """The picture file, or None. A missing pose falls back to another pose."""
     if _folder is None or key not in HOSTS:
         return None
-    for k in [kind] + ([p for p in POSES if p != kind] if kind in POSES else []):
+    family = POSES if kind in POSES else CHIBIS if kind in CHIBIS else ()
+    for k in [kind] + [p for p in family if p != kind]:
         for ext in EXTS:
             p = _folder / key / f"{k}{ext}"
             if p.is_file():
                 return p
     return None
+
+
+def face(key: str) -> Optional[Path]:
+    """The small face on go-live cards: the head picture, else a chibi."""
+    return picture(key, "head") or picture(key, "chibi_happy")
 
 
 def data_url(key: str, kind: str) -> str:
@@ -129,6 +138,7 @@ def pictures(key: str) -> Dict[str, bool]:
 # ── lines ──────────────────────────────────────────────────────────────
 # Blanks: {name} {game} {tag} {length} {signoff} {streams} {hours} {top_name} {top_count}
 # {longest_name} {longest_len} {quiet_day} {quiet_name} {new_game} {new_game_name} {other}
+# day posts: {when} ("Today", "This weekend") {when_lower} {count} {first_name} {first_time}
 TEMPLATES: Dict[str, Dict[str, List[str]]] = {
     "colette": {
         "live_start": ["{name} is LIVE!! Grab a coffee and get in here! ☕", "Drop everything, {name} just went live!!",
@@ -161,6 +171,10 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
         "desk_nudge": ["Haven't seen {quiet_name} in a while. Go say hi!", "Next time: more {quiet_name}, please!",
                        "Next time? Bigger. Louder. More caffeine."],
         "desk_signoff": ["Colette out! ☕", "See you next time, team! Colette out!", "Refilling my mug. Bye bye!! ☕"],
+        "day_one": ["{when}: {first_name} at {first_time}! Mark it, team!! ☕", "Just one on the board {when_lower}: {first_name}! Show some love!"],
+        "day_many": ["{count} streams {when_lower}!! Starting with {first_name} at {first_time}! ☕",
+                     "{when}: {count} streams lined up! Coffee's on, I'll see you there!!",
+                     "{count} streams {when_lower}?! First up, {first_name}! Let's GO!"],
     },
     "clark": {
         "live_start": ["{name} is live. Filed under: worth watching.", "{name} has started a stream. Noted.",
@@ -193,6 +207,10 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
         "desk_nudge": ["{quiet_name} has been quiet. A friendly hello would not go amiss.",
                        "For next time: a little more {quiet_name}, if possible.", "For next time: more of the same, please."],
         "desk_signoff": ["Cider's on. — Clark", "Filed and closed. — Clark", "Until next time. — Clark"],
+        "day_one": ["{when}: {first_name} at {first_time}. Noted.", "One stream on file {when_lower}: {first_name}, {first_time}."],
+        "day_many": ["{when}: {count} streams on file. {first_name} opens at {first_time}.",
+                     "{count} streams scheduled {when_lower}. All in order.",
+                     "The {when_lower} schedule: {count} streams. I've put the cider on."],
     },
 }
 
@@ -249,6 +267,15 @@ def live_line(key: str, event: str, name: str, game: str = "", tag: str = "", le
         return one(key, "live_change", facts, "", rng)
     slot = "live_end_signoff" if signoff else "live_end_long" if length >= LONG_STREAM else "live_end"
     return one(key, slot, facts, "live_end", rng)
+
+
+def day_line(key: str, when: str, count: int, first_name: str = "", first_time: str = "",
+             rng: Optional[random.Random] = None) -> str:
+    """The host's line on a day post (flavrpromo/focus.py): ``when`` its label ("Today", "This weekend"),
+    ``count`` streams on it, the first one's name and time ("8 PM")."""
+    facts = {"when": when, "when_lower": when.lower(), "count": count, "first_name": first_name,
+             "first_time": first_time}
+    return one(key, "day_one" if count == 1 else "day_many", facts, "day_many", rng)
 
 
 def speaker(key: str) -> str:

@@ -4,7 +4,8 @@ The hosts' review cards as HTML pages, screenshotted at 1600 x 900 like the boar
 
   opener  posted before the review's board: the host in a pose (flavrpromo/hosts.py ``pose``), their
           line in a speech bubble (Colette) or on a filed report (Clark), and up to 3 highlights,
-          each with a short comment: tilted sticky notes for Colette, a neat table for Clark.
+          each with a short comment: tilted sticky notes for Colette, a neat table for Clark. Their
+          chibi in the same mood peeks over the bubble / report's top-right edge.
   desk    posted after the board: the host's desk picture with a highlight, a nudge for next time
           and their sign-off ("From Colette's desk" / "Closing notes").
 
@@ -45,6 +46,13 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
            comments: List[str], pose: str) -> str:
     """The opener card. ``notes``: hosts.notes() rows; ``comments``: the picked comment for each."""
     pic = hosts.data_url(key, pose)
+    # the chibi in the same mood peeks over the top-right edge of the bubble / report: drawn before
+    # it, so the card covers the chibi's lower half (no chibi uploaded = nothing)
+    chibi = hosts.data_url(key, f"chibi_{pose}")
+    # (cut off just under the card's top edge at y 170, so a short bubble never shows the chibi's feet)
+    peek = (f'<div style="position:absolute;right:90px;top:24px;width:260px;height:156px;overflow:hidden">'
+            f'<img src="{chibi}" style="display:block;margin:0 auto;height:290px;max-width:260px;object-fit:contain">'
+            f'</div>') if chibi else ""
     left = 470 if pic else 60
     width = 1540 - left
     rows = list(zip(notes, comments + [""] * len(notes)))
@@ -56,7 +64,7 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
             for n, c in rows)
         inner = (f'<div class=serif style="position:absolute;left:44px;top:34px;font-size:56px;color:#e0782e">{_e(heading)}</div>'
                  f'<div style="position:absolute;left:46px;top:106px;font-size:22px;letter-spacing:2px;color:#d9b88a">'
-                 f'FILED BY CLARK · DIVISION CLERK</div>{img}'
+                 f'FILED BY CLARK · DIVISION CLERK</div>{img}{peek}'
                  f'<div class=serif style="position:absolute;left:{left}px;top:170px;width:{width}px;height:660px;background:#f4ead8;'
                  f'color:#2b1d12;border-radius:6px;box-shadow:0 10px 30px #000a;padding:36px 44px">'
                  f'<div style="display:flex;justify-content:space-between;font-size:20px;letter-spacing:2px;color:#8a5a33;'
@@ -78,7 +86,7 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
     inner = (f'<img src="{logo_data_url()}" style="position:absolute;left:40px;top:30px;height:66px">'
              f'<div style="position:absolute;left:270px;top:36px;font-size:50px;font-weight:900;letter-spacing:3px">{_e(heading.upper())}</div>'
              f'<div style="position:absolute;left:272px;top:98px;font-size:22px;color:#f8cf33;font-weight:700">'
-             f'with Colette Cappuccino · Marketing · {_e(range_text)}</div>{img}'
+             f'with Colette Cappuccino · Marketing · {_e(range_text)}</div>{img}{peek}'
              f'<div class=bub style="left:{left}px;top:170px;width:{width}px;border:5px solid #f72ca2">{_e(line)}</div>'
              f'{stickies}<div style="position:absolute;left:{left + 20}px;top:790px;font-size:24px;color:#ddd">'
              f'Full board in the next picture ↓ &nbsp; My notes at the end!</div>')
