@@ -33,6 +33,10 @@ Saved in the database (kv):
   calendar_post.<group>     {week, channel, message, sig, drawn_at}: the live board post
   calendar_review.<label>.<group>  the first day (ISO date) of the newest review posted
   preview_opened.<group>    the week (ISO date) whose host preview opener went out (posted once)
+  preview_host.<group>      who presented that preview (the week's board is drawn in their look)
+  host_board                draw boards in the presenting host's look (default on with hosts on;
+                            settings page, Hosts). The week's host is kept in calendar_post.<group>
+                            "host"; a review's board takes the review's host.
   review_times              {"week": minutes, "weekend": minutes or None = off} (/setup review-times;
                             default 10 AM both: REVIEW_DEFAULTS)
   backfill.<week>           when that week (ISO date of its Sunday) was last filled in from the
@@ -69,7 +73,7 @@ from zoneinfo import ZoneInfo
 from .calendar import UPLOAD_ICONS, UPLOAD_NAMES, UPLOADS_HEAD, Tile, Week, build_week, changes, review_range, week_start
 from .share import X_STYLES, article, channel_url, discord_parts, x_posts
 from .render import COVER_H, COVER_W, ImageCache, Screenshotter, cover, day_card, logo_data_url, page
-from . import groups, host_picker, hosts, talent
+from . import groups, host_cards, host_picker, hosts, talent
 from .store import Store
 
 log = logging.getLogger("flavrpromo.calendar_post")
@@ -245,12 +249,21 @@ class CalendarPoster:
         week = self.build_review(group, label)
         return week, await self.png(week)
 
-    async def png(self, week: Week) -> Optional[bytes]:
-        """The picture, or None when Chromium isn't there / fails (posts go out as text then)."""
+    def board_host(self, key: str = "") -> str:
+        """``key`` when boards are drawn in the host's look (hosts on and kv host_board not off), else ""."""
+        ok = key in hosts.HOSTS and hosts.enabled(self.store) and self.store.get("host_board") is not False
+        return key if ok else ""
+
+    async def png(self, week: Week, host: str = "") -> Optional[bytes]:
+        """The picture, or None when Chromium isn't there / fails (posts go out as text then).
+        ``host``: draw it in that host's look (flavrpromo/host_cards.py ``board``; checked with board_host)."""
         if self.shooter is None:
             return None
         try:
             await self.images.fetch_all(week)
+            host = self.board_host(host)
+            if host:
+                return await self.shooter.png(host_cards.board(host, week, self.images.data_url, logo=logo_data_url()))
             return await self.shooter.png(page(week, self.images.data_url, logo=logo_data_url()))
         except Exception as e:
             self.errors["picture"] = str(e) or type(e).__name__
@@ -310,7 +323,9 @@ class CalendarPoster:
         if offset < 0:
             await self.ensure_backfill(start)
         week = self.build(group, start, recap=offset < 0)
-        return week, await self.png(week)
+        post = self.store.get(f"calendar_post.{group}") or {}
+        host = str(post.get("host") or "") if offset == 0 and post.get("week") == start.date().isoformat() else ""
+        return week, await self.png(week, host)        # this week: in its host's look, like the post
 
     def share_messages(self, week: Week, style: str = "") -> List[str]:
         """The copy-ready texts: a short note, the Discord version, then each X post. ``style``: an X
@@ -457,7 +472,7 @@ class CalendarPoster:
             else:
                 await self.backfill_review(label)       # streams missed while the bot was down (ready() does it too)
             week = self.build_review(group, label)
-            png = await self.png(week)
+            png = await self.png(week, picked["host"] if picked else "")
             if await self.discord.cal_send(channel, embed(week), png, f"{label}-review-{start:%Y-%m-%d}.png"):
                 self.store.put(key, start.date().isoformat())
                 self._note(group, f"{groups.heading(group, True, label)} posted", png)
@@ -477,11 +492,17 @@ class CalendarPoster:
             if post.get("message") and posted_week and posted_week != this_week.date().isoformat():
                 await self._edit(group, post, final=True)       # last week's post: its final state
             week = self.build(group, this_week)
-            png = await self.png(week)
+            # the week's host (the week-ahead opener's, else a fresh pick), kept all week in the post record
+            host = ""
+            if hosts.enabled(self.store) and self.store.get("host_board") is not False:
+                host = (self.store.get(f"preview_host.{group}") if self.store.get(f"preview_opened.{group}")
+                        == this_week.date().isoformat() else "") or hosts.choose(self.store)
+            png = await self.png(week, host)
             msg = await self.discord.cal_send(channel, embed(week), png, f"calendar-{this_week:%Y-%m-%d}.png")
             if msg:
                 self.store.put(f"calendar_post.{group}", {"week": this_week.date().isoformat(), "channel": channel,
-                                                          "message": str(msg), "sig": week.signature(), "drawn_at": now})
+                                                          "message": str(msg), "sig": week.signature(), "drawn_at": now,
+                                                          "host": host})
                 self._seen[group] = (this_week.date().isoformat(), {t.key: t for t in week.tiles()})
                 if new_week_due and posted_week:
                     self._note(group, f"New {groups.name(group)} week posted", png)
@@ -500,6 +521,7 @@ class CalendarPoster:
             await host_picker.post_card(self, channel, picked, "opener")
             host_picker.done(self.store, picked)
             self.store.put(f"preview_opened.{group}", week_iso)
+            self.store.put(f"preview_host.{group}", picked["host"])
             return True
         p = self.store.get(host_picker.key_of("preview", group)) or {}
         wait = host_picker.preview_wait(self.store)
@@ -525,7 +547,7 @@ class CalendarPoster:
         self._diff(group, post["week"], week)
         if sig == post.get("sig") and not stale and not final:
             return
-        png = await self.png(week)
+        png = await self.png(week, str(post.get("host") or ""))       # the week's host (kept in the record)
         ok = await self.discord.cal_edit(post["channel"], post["message"], embed(week), png,
                                          f"calendar-{start:%Y-%m-%d}.png")
         if ok:

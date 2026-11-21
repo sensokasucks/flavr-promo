@@ -542,3 +542,168 @@ def cover(key: str, week: Any, img: Callable[[str], str], heading: str, figure: 
             f'{_e(stats)}</div></div>')
     return _doc("background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a);color:#fff",
                 f"<style>{css}</style>{left}<div class=g>{cards}</div>{fig}")
+
+
+# ── the end-of-stream recap card (owner 2026-11-21) ──────────────────────────────────────
+PLATFORM_NAMES = {"youtube": "YouTube", "twitch": "Twitch", "kick": "Kick"}
+
+
+def recap_pose(r: Dict[str, Any]) -> str:
+    """The host's mood on a recap: sleepy after a marathon (hosts.LONG_STREAM), pointing at a new
+    game, else happy."""
+    if float(r.get("length_s") or 0) >= hosts.LONG_STREAM:
+        return "sleepy"
+    return "pointing" if any("NEW" in (g.get("tag") or "") for g in r.get("played") or []) else "happy"
+
+
+def recap(key: str, r: Dict[str, Any], chibi_main: bool = False) -> str:
+    """The recap picture that replaces the stream picture on an ended go-live card (1600 x 900).
+    ``r`` (flavrpromo/bot.py ``_recap_data``): name, title, when ("Sat Nov 21 · 7 PM – 10:20 PM"),
+    length ("3 h 20 min"), length_s (seconds), played [{game, tag, length}], platforms [names],
+    viewers (peak, 0 = unknown), signoff (their sign-off line, "" = none), vod (True = a VOD link is
+    on the card), thumb / avatar (data: URLs or ""), line (what the host says about it).
+    Colette pins the stream up as a taped polaroid next to sticky notes; Clark files it as a stream
+    report with a clipped photo and a neat table. ``chibi_main``: the chibi stands instead of the pose.
+    Called by flavrpromo/bot.py (``post_end``) and /settings previews."""
+    pose = recap_pose(r)
+    pic = hosts.data_url(key, f"chibi_{pose}" if chibi_main else pose) or hosts.data_url(key, pose) \
+        or hosts.data_url(key, f"chibi_{pose}")
+    thumb = r.get("thumb") or r.get("avatar") or ""
+    shot = f"background-image:url(&quot;{_e(thumb)}&quot;)" if thumb else ""
+    played = list(r.get("played") or [])[:4]
+    more = len(r.get("played") or []) - len(played)
+    plats = " · ".join(PLATFORM_NAMES.get(str(p), str(p).title()) for p in r.get("platforms") or [])
+    peak = f"{r['viewers']:,} peak" if int(r.get("viewers") or 0) > 0 else ""
+    if key == "clark":
+        rows = [("Length", _e(r.get("length"))), ("Aired", _e(r.get("when")))]
+        rows += [("Game" if len(played) == 1 else f"Game {i + 1}",
+                  f'<b>{_e(g["game"])}</b>{(" · " + _e(g["tag"])) if g.get("tag") else ""} · '
+                  f'<span style="white-space:nowrap">{_e(g["length"])}</span>')
+                 for i, g in enumerate(played)]
+        if more > 0:
+            rows.append(("", f"+{more} more on file"))
+        if plats or peak:
+            rows.append(("Channels", _e(" · ".join(x for x in (plats, peak) if x))))
+        rows.append(("VOD", "on file, link below" if r.get("vod") else "pending"))
+        table = "".join(f'<tr style="border-bottom:1px solid #d8c3a3"><td style="padding:8px 14px 8px 0;color:#8a5a33;'
+                        f'white-space:nowrap;vertical-align:top">{a}</td><td style="text-align:right">{b}</td></tr>'
+                        for a, b in rows)
+        sign = (f'<div style="margin-top:18px;font-size:24px;font-style:italic;color:#5a3a20">“{_e(r["signoff"])}”</div>'
+                if r.get("signoff") else "")
+        img = (f'<img src="{pic}" style="position:absolute;left:40px;bottom:0;height:640px;max-width:360px;'
+               f'object-fit:contain;object-position:bottom">' if pic else "")
+        left = 420 if pic else 60
+        inner = (f'<div class=serif style="position:absolute;left:44px;top:30px;font-size:56px;color:#e0782e">Stream Report</div>'
+                 f'<div style="position:absolute;left:46px;top:102px;font-size:22px;letter-spacing:2px;color:#d9b88a">'
+                 f'FILED BY CLARK · DIVISION CLERK</div>{img}'
+                 f'<div class=serif style="position:absolute;left:{left}px;top:160px;width:{1560 - left}px;height:700px;'
+                 f'background:#f4ead8;color:#2b1d12;border-radius:6px;box-shadow:0 10px 30px #000a;padding:30px 40px">'
+                 f'<div style="display:flex;justify-content:space-between;font-size:20px;letter-spacing:2px;color:#8a5a33;'
+                 f'border-bottom:2px solid #c9a77c;padding-bottom:10px"><span>FILE · {_e(str(r.get("name")).upper())}</span>'
+                 f'<span>STATUS: CLOSED 🍎</span></div>'
+                 f'<div style="display:flex;gap:30px;margin-top:22px">'
+                 f'<div style="flex:0 0 470px;position:relative"><div style="background:#fffaf0;padding:10px;box-shadow:0 3px 8px #0004">'
+                 f'<i style="display:block;aspect-ratio:16/9;background:#d9c7a8 center/cover no-repeat;{shot}"></i>'
+                 f'<div style="margin-top:8px;font-size:21px;line-height:1.3;max-height:56px;overflow:hidden">{_e(r.get("title"))}</div></div>'
+                 f'<div style="position:absolute;top:-14px;left:26px;width:18px;height:46px;border:4px solid #9aa3ad;border-radius:9px"></div>'
+                 f'<div style="margin-top:22px;font-size:26px;line-height:1.45">{_e(r.get("line"))}</div></div>'
+                 f'<div style="flex:1;min-width:0"><div style="font-size:40px;font-weight:bold">{_e(r.get("name"))}</div>'
+                 f'<table style="margin-top:12px;font-size:22px;border-collapse:collapse;width:100%">{table}</table>{sign}</div></div>'
+                 f'<div style="position:absolute;right:40px;bottom:26px;font-size:21px;color:#8a5a33;font-style:italic">'
+                 f'Filed and closed. — C.</div></div>')
+        return _doc("background:linear-gradient(135deg,#1c130d,#3a2416 70%,#4a2a14);color:#f3e6d3", inner)
+    # Colette: the stream as a taped polaroid, sticky notes for the numbers, her line in a bubble
+    notes = [("LIVE FOR", r.get("length") or "", "")]
+    if played:
+        notes.append(("PLAYED", " → ".join(g["game"] for g in played) + (f" +{more}" if more > 0 else ""),
+                      next((g["tag"] for g in played if g.get("tag")), "")))
+    notes.append(("VOD", "link below!" if r.get("vod") else "coming soon", peak))
+    stickies = "".join(
+        f'<div class=note style="position:static;width:300px;transform:rotate({NOTE_TILT[i]});background:{NOTE_COLOURS[i]}">'
+        f'📌 {_e(a)}<br><b style="font-size:27px;display:block;max-height:108px;overflow:hidden">{_e(b)}</b>'
+        + (f'<span style="font-size:19px">{_e(c)}</span>' if c else "") + "</div>"
+        for i, (a, b, c) in enumerate(notes))
+    img = (f'<img src="{pic}" style="position:absolute;right:30px;bottom:0;height:640px;max-width:380px;'
+           f'object-fit:contain;object-position:bottom">' if pic else "")
+    sign = (f'<div style="position:absolute;left:60px;top:800px;font-size:26px;color:#f8cf33;font-weight:700;'
+            f'font-style:italic;max-width:1050px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+            f'“{_e(r["signoff"])}”</div>' if r.get("signoff") else "")
+    inner = (f'<img src="{logo_data_url()}" style="position:absolute;left:40px;top:30px;height:66px">'
+             f'<div style="position:absolute;left:270px;top:32px;font-size:50px;font-weight:900;letter-spacing:3px">'
+             f'THAT\'S A WRAP!</div>'
+             f'<div style="position:absolute;left:272px;top:96px;font-size:22px;color:#f8cf33;font-weight:700">'
+             f'{_e(r.get("name"))} · {_e(r.get("when"))}{(" · " + _e(plats)) if plats else ""}</div>'
+             f'<div style="position:absolute;left:70px;top:170px;width:640px;background:#fff;padding:14px 14px 10px;'
+             f'transform:rotate(-2deg);box-shadow:4px 8px 18px #0008;color:#1a1a1a">'
+             f'<div style="position:absolute;top:-16px;left:50%;width:130px;height:32px;margin-left:-65px;transform:rotate(-3deg);'
+             f'background:{TAPE[0]}"></div>'
+             f'<i style="display:block;aspect-ratio:16/9;background:#2a1026 center/cover no-repeat;{shot}"></i>'
+             f'<b style="display:block;margin-top:8px;font-size:30px;font-weight:900">{_e(r.get("name"))}</b>'
+             f'<span style="display:block;color:#c21c80;font-weight:700;font-size:21px;white-space:nowrap;overflow:hidden;'
+             f'text-overflow:ellipsis">{_e(r.get("title"))}</span></div>'
+             f'<div class=bub style="left:770px;top:200px;width:{430 if pic else 780}px;border:5px solid #f72ca2;font-size:33px;'
+             f'padding:32px 36px">'
+             f'{_e(r.get("line"))}</div>'
+             f'<div style="position:absolute;left:70px;top:610px;width:{1140 if pic else 1460}px;display:flex;gap:26px">{stickies}</div>'
+             f'{sign}{img}')
+    return _doc("background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a);color:#fff", inner)
+
+
+# ── the weekly board in the host's look (owner 2026-11-21) ───────────────────────────────
+# The plain board (render.page) with a host's skin on top: the same columns, tiles and sizes, so
+# everything that fits on the board still fits. Colette: her purple wall, FlaVR colours, white
+# polaroid frames, tape on each day's heading. Clark: his brown desk, each day a cream report page,
+# serif type, photos with a white border. Their chibi head and name sit at the right of the header.
+BOARD_CSS = {
+    "colette": (
+        "body{background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a)}"
+        "h1{font-weight:900;letter-spacing:3px}.range{color:#f8cf33;font-weight:700}.stats{color:#fff;font-weight:700}"
+        ".day{background:#ffffff0d;border:2px dashed #ffffff26;border-radius:16px;position:relative;padding-top:20px}"
+        ".dh{position:relative}.dh:before{content:'';position:absolute;left:-4px;top:-14px;width:70px;height:18px;"
+        "background:var(--tape);transform:rotate(-4deg);opacity:.85}"
+        ".d0{--tape:#f8cf33}.d1{--tape:#b7ef33}.d2{--tape:#2ae0d4}.d3{--tape:#f72ca2}"
+        ".dh b{font-weight:900}.day.today{border:3px solid #f72ca2;background:#f72ca218;box-shadow:0 0 30px #f72ca255}"
+        ".dh em{background:#f72ca2;color:#fff}"
+        ".tile{background:#fff;border:0;border-radius:3px;padding:6px 6px 0;box-shadow:3px 6px 12px #0009;color:#1a1a1a}"
+        ".day .tile:nth-child(odd){transform:rotate(-1.2deg)}.day .tile:nth-child(even){transform:rotate(1deg)}"
+        ".tile .thumb{border-radius:2px}.who b{color:#1a1a1a;font-weight:900}.who i{color:#555}.who u{color:#c21c80;font-weight:700}"
+        ".row{background:#fff;border:0;border-radius:4px;color:#1a1a1a;box-shadow:2px 4px 8px #0008}"
+        ".row b{color:#1a1a1a;font-weight:900}.row i{color:#555}.row .t{color:#c21c80}.row .t.live{color:#e5312f}"
+        ".thumb{background-color:#2a1026}.thumb .noart{color:#ffffff99}"
+        ".more{color:#f8cf33;font-weight:700}.empty{color:#f8cf33aa;font-weight:700}"
+        "footer{color:#f8cf33cc;font-weight:700}"
+        ".host{display:flex;align-items:flex-end;gap:10px;padding-bottom:2px;margin-left:18px}"
+        ".host img{height:78px;margin-bottom:-12px}.host span{font-size:15px;color:#f8cf33;font-weight:700;padding-bottom:6px;"
+        "white-space:nowrap}"),
+    "clark": (
+        "body{background:linear-gradient(135deg,#1c130d,#3a2416 70%,#4a2a14);color:#f3e6d3}"
+        "body,h1,.who,.row{font-family:'DejaVu Serif',serif}"
+        "h1{color:#e0782e;font-weight:normal;letter-spacing:1px}.range{color:#d9b88a;letter-spacing:1px}.stats{color:#f3e6d3}"
+        ".day{background:#f4ead8;border:0;border-radius:4px;box-shadow:0 8px 20px #000a;color:#2b1d12}"
+        ".dh span{color:#8a5a33}.day .dh b,.d0 .dh b,.d1 .dh b,.d2 .dh b,.d3 .dh b{color:#2b1d12}"
+        ".dh{border-bottom:2px solid #c9a77c;padding-bottom:4px}"
+        ".day.today{border:0;outline:3px solid #e0782e;background:#fbf3e3;box-shadow:0 0 30px #e0782e55}"
+        ".day.past{opacity:1;background:#e9dcc4}.dh em{background:#e0782e;color:#fff}"
+        ".tile{background:#fffaf0;border:0;border-radius:2px;padding:6px 6px 0;box-shadow:0 3px 8px #0004}"
+        ".who b{color:#2b1d12}.who i{color:#6b4a2e}.who u{color:#8a5a33}"
+        ".av{border-color:#c9a77c;background:#e0d0b4;color:#5a3a20}"
+        ".row{background:#fffaf0;border:1px solid #d8c3a3;color:#2b1d12}.row b{color:#2b1d12}.row i{color:#6b4a2e}"
+        ".row .t{color:#8a5a33}.row .t.live{color:#c0392b}"
+        ".thumb{background-color:#d9c7a8}.thumb .noart{color:#8a5a33}"
+        ".more{color:#8a5a33}.empty{color:#8a5a33;font-style:italic}"
+        "footer{color:#d9b88a;font-style:italic}"
+        ".host{display:flex;align-items:flex-end;gap:10px;padding-bottom:2px;margin-left:18px}"
+        ".host img{height:78px;margin-bottom:-12px}.host span{font-size:15px;color:#d9b88a;letter-spacing:1px;padding-bottom:6px;"
+        "white-space:nowrap}"),
+}
+
+
+def board(key: str, week: Any, img: Callable[[str], str], logo: str = "") -> str:
+    """The weekly board (or a review's board) in host ``key``'s look: render.page with BOARD_CSS and
+    the host's chibi head + name in the header. Called by flavrpromo/calendar_post.py (``png`` with a
+    host, kv host_board on) and the settings page preview."""
+    from .render import page
+    pic = hosts.data_url(key, "chibi_head") or hosts.data_url(key, "head")
+    who = "pinned up by Colette ☕" if key == "colette" else "FILED BY CLARK 🍎"
+    head = f'<div class=host>{f"<img src={chr(34)}{pic}{chr(34)}>" if pic else ""}<span>{_e(who)}</span></div>'
+    return page(week, img, logo=logo, extra_css=BOARD_CSS.get(key, ""), extra_head=head)
