@@ -5,8 +5,8 @@ for every slash command (/settings/commands, command_forms.py)."""
 from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
 
-from flavrpromo import (article_editor, card_page, command_forms, config, groups, host_picker, hosts, kobold,
-                        share)
+from flavrpromo import (article_editor, card_page, command_forms, config, groups, host_cards, host_picker, hosts,
+                        kobold, share)
 from flavrpromo.bot import PromoBot
 from flavrpromo.calendar_post import CalendarPoster
 from flavrpromo.pings import Pinger
@@ -144,7 +144,8 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             view = await (await c.get(f"/settings/article/view?d={dkey}")).text()
             assert "/settings/article/day?d=" in view and "/calendar/day.png" not in view.split('id="body"')[1]
             # the other layouts: for the whole article, or one day on its own
-            for lay, mark in (("timeline", "pinned up by Colette"), ("spotlight", "TOP PICK")):
+            for lay, mark in (("timeline", "pinned up by Colette"), ("spotlight", "TOP PICK"), ("columns", "#fbe48a"),
+                              ("zigzag", "margin-left:0px"), ("cards", "border-radius:14px")):
                 p = await act("save", on_summary="", day_layout=lay)
                 await c.get(f"/settings/article/day?d={dkey}&day={day[3:]}")
                 assert mark in poster.shooter.docs[-1] and p["day_layout"] == lay
@@ -161,6 +162,25 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             assert poster.store.get(dkey) is None
     finally:
         hosts.init(None)
+
+
+def test_every_day_layout_draws_for_both_hosts(tmp_path):
+    poster = _poster(tmp_path)
+    week = poster.build_review("flavr", "week")
+    day = next(i for i, d in enumerate(week.days) if d)
+    for key in hosts.HOSTS:
+        for lay in host_cards.DAY_LAYOUTS:
+            doc = host_cards.day(key, week, day, lambda u: "", "A line <b>", layout=lay)
+            assert "A line &lt;b&gt;" in doc and "Lulu" in doc, (key, lay)      # escaped, stream shown
+        empty = next(i for i, d in enumerate(week.days) if not d)
+        assert "Nothing" in host_cards.day(key, week, empty, lambda u: "", layout="cards")
+
+
+def test_clark_is_a_vtuber_nerd():
+    """Sen 2026-11-21: Clark loves the job because it's VTuber work, sometimes says "Anime Americans"."""
+    all_lines = " ".join(x for rows in hosts.TEMPLATES["clark"].values() for x in rows)
+    assert "Anime Americans" in all_lines and "VCR" in all_lines
+    assert "Anime Americans" in kobold.builtin_card("clark")["personality"]
 
 
 def test_card_html_takes_the_article_heading_and_pose():

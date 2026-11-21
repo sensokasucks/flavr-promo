@@ -141,7 +141,10 @@ TILT = ("-2deg", "1.5deg", "-1deg", "2.2deg", "-1.6deg", "1deg")
 # layouts so i can pick from them"); each one in both hosts' looks. Keep in step with ``day``.
 DAY_LAYOUTS = {"wall": "Pinned wall (every stream the same size)",
                "timeline": "Timeline (in time order, with stream titles)",
-               "spotlight": "Spotlight (the longest stream big, the rest beside it)"}
+               "spotlight": "Spotlight (the longest stream big, the rest beside it)",
+               "columns": "Two columns of colour strips (busy days)",
+               "zigzag": "Zigzag colour strips (bigger pictures)",
+               "cards": "Colour cards (time on top, title under)"}
 
 
 def day(key: str, week: Any, i: int, img: Callable[[str], str], line: str = "", chibi_kind: str = "",
@@ -151,7 +154,7 @@ def day(key: str, week: Any, i: int, img: Callable[[str], str], line: str = "", 
     about the day ("" = no bubble). ``chibi_kind``: which picture stands in the corner (default
     their happy chibi). ``layout``: one of DAY_LAYOUTS (unknown = wall).
     Called by flavrpromo/article_editor.py (/settings/article/day)."""
-    if layout in ("timeline", "spotlight"):
+    if layout in DAY_LAYOUTS and layout != "wall":
         return _day_alt(key, week, i, img, line, chibi_kind, layout)
     date = week.start + timedelta(days=i)
     tiles = list(week.days[i])
@@ -291,7 +294,11 @@ def _day_alt(key: str, week: Any, i: int, img: Callable[[str], str], line: str, 
                title and its length (Colette: sticky-note strips in turn; Clark: a ruled ledger page).
                At most TIMELINE_MAX rows, then "+N more".
     spotlight  the day's longest stream (else the first) big on the left with a "top pick" / "featured
-               entry" stamp, the others smaller in two columns beside it (at most SPOT_MAX)."""
+               entry" stamp, the others smaller in two columns beside it (at most SPOT_MAX).
+    columns    coloured strips like Colette's timeline in two columns (busy days, COLUMNS_MAX).
+    zigzag     one bigger coloured strip per stream, swinging left and right (ZIGZAG_MAX).
+    cards      tall coloured cards side by side: time on top, picture, name, length, title (CARDS_MAX).
+    The colourful ones use COLETTE_COLOURS / CLARK_COLOURS (Sen 2026-11-21)."""
     date = week.start + timedelta(days=i)
     tiles = sorted(week.days[i], key=lambda t: t.at)
     n_word = f"{len(tiles)} stream{'' if len(tiles) == 1 else 's'}"
@@ -340,6 +347,71 @@ def _day_alt(key: str, week: Any, i: int, img: Callable[[str], str], line: str, 
             rows.append(f'<div class=tm style="font-size:24px;padding:4px 18px">+{len(tiles) - len(shown)} more</div>')
         pad = "padding:20px 30px" if clark else "padding:10px 0"
         body = f'<div class="pg {sk["font"]}" style="display:flex;flex-direction:column;justify-content:center;gap:12px;{pad}">{"".join(rows)}</div>'
+    elif layout in ("columns", "zigzag"):
+        # coloured strips like Colette's timeline (Sen 2026-11-21: "pretty clean and colorful"), both hosts
+        if layout == "columns":     # two columns of strips: room for a busy day
+            cap = COLUMNS_MAX
+            shown = tiles if len(tiles) <= cap else tiles[:cap - 1]
+            n = len(shown) + (len(tiles) > len(shown))
+            per = -(-n // 2) if n > 3 else n
+            row_h = min(170, (660 - 12 * (per - 1)) // per)
+            width = (area_w - 60) // 2 if n > 3 else area_w - 40
+        else:                       # one strip per stream, swinging left and right, bigger pictures
+            cap = ZIGZAG_MAX
+            shown = tiles if len(tiles) <= cap else tiles[:cap - 1]
+            n = len(shown) + (len(tiles) > len(shown))
+            row_h = min(200, (680 - 14 * (n - 1)) // n)
+            width = area_w - 200
+        strips = []
+        for k, t in enumerate(shown):
+            tilt = 0.0 if clark else (-0.6 if k % 2 else 0.5)
+            flip = layout == "zigzag" and k % 2 == 1
+            strip = _strip(t, k, row_h, width, clark, img, week.tz, tilt, flip)
+            if layout == "zigzag":
+                strip = f'<div style="margin-left:{180 if flip else 0}px">{strip}</div>'
+            strips.append(strip)
+        if len(tiles) > len(shown):
+            strips.append(f'<div class=tm style="font-size:24px;padding:4px 18px;width:{width}px">+{len(tiles) - len(shown)} more</div>')
+        if layout == "columns" and n > 3:
+            box = (f"display:grid;grid-template-columns:{width}px {width}px;grid-auto-flow:column;"
+                   f"grid-template-rows:repeat({per},{row_h}px);gap:12px 20px;align-content:center;justify-content:center")
+        else:
+            box = "display:flex;flex-direction:column;justify-content:center;gap:14px;padding-left:20px"
+        body = f'<div class="pg {sk["font"]}" style="{box};{"padding:10px" if clark else ""}">{"".join(strips)}</div>'
+    elif layout == "cards":
+        # a row (or two) of tall coloured cards: the time on top, the picture, the name, the title
+        shown = tiles if len(tiles) <= CARDS_MAX else tiles[:CARDS_MAX - 1]
+        n = len(shown) + (len(tiles) > len(shown))
+        cols = n if n <= 5 else -(-n // 2)
+        rows_n = -(-n // cols)
+        cw = min(400, (area_w - 40 - 18 * (cols - 1)) // cols)
+        pal = CLARK_COLOURS if clark else COLETTE_COLOURS
+
+        def card_h(w: int) -> float:
+            """A card's height in px at width ``w`` (padding, chip, picture, name, length, title)."""
+            f = 30 if w >= 300 else 24 if w >= 210 else 19
+            return 24 + (f + 12) + 18 + (w - 34) * 9 / 16 + 1.3 * (f - 2) + 1.3 * (f - 8) + 2 * (f - 6) + 10
+
+        while cw > 120 and rows_n * card_h(cw) + 24 * (rows_n - 1) > 690:
+            cw -= 10                                # two rows must fit under the heading
+        fs = 30 if cw >= 300 else 24 if cw >= 210 else 19
+        cards = []
+        for k, t in enumerate(shown):
+            tilt = "" if clark else f"transform:rotate({TILT[k % len(TILT)]});"
+            cards.append(
+                f'<div style="width:{cw}px;background:{pal[k % len(pal)]};border-radius:{6 if clark else 14}px;'
+                f'padding:12px;box-shadow:4px 7px 16px #0007;color:#2a2116;{tilt}">'
+                f'{_chip(clock(t.at, week.tz), fs, clark, block=True)}'
+                f'<div class=fr style="padding:5px;margin:10px 0 8px"><i style="{_bg(t, img)}">{_plats(t)}</i></div>'
+                f'<div class=nm style="font-size:{fs - 2}px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{_e(t.name)}</div>'
+                f'<div style="font-size:{fs - 8}px;font-weight:700;color:#5a2a3a">{_e(_length(t))}</div>'
+                f'<div style="font-size:{fs - 10}px;color:#3a3028;height:{2 * (fs - 6)}px;overflow:hidden;line-height:1.25">'
+                f'{_e((t.title or t.game or "")[:80])}</div></div>')
+        if len(tiles) > len(shown):
+            cards.append(f'<div class=tm style="width:{cw}px;font-size:26px;align-self:center;text-align:center">'
+                         f'+{len(tiles) - len(shown)} more</div>')
+        body = (f'<div class="pg {sk["font"]}" style="display:flex;flex-wrap:wrap;justify-content:center;align-content:center;'
+                f'gap:{24 if rows_n > 1 else 0}px 18px;padding:10px">{"".join(cards)}</div>')
     else:
         star = max(tiles, key=lambda t: t.length if t.kind == "past" and t.end else -1) \
             if any(t.kind == "past" and t.end for t in tiles) else tiles[0]
@@ -370,4 +442,52 @@ def _day_alt(key: str, week: Any, i: int, img: Callable[[str], str], line: str, 
 
 
 TIMELINE_MAX = 7        # rows on a timeline day picture; more = "+N more" (the article lists them all)
+COLUMNS_MAX = 12        # strips on a two-column day picture
+ZIGZAG_MAX = 7          # strips on a zigzag day picture (bigger pictures, fewer fit)
+CARDS_MAX = 10          # cards on a cards day picture (two rows of five)
+# the strip / card colours: Colette's FlaVR sticky notes and pink; Clark's 90s file-folder tabs
+# (mustard, sage, terracotta, dusty blue)
+COLETTE_COLOURS = ("#fbe48a", "#b7ef33", "#2ae0d4", "#ff9ad5")
+CLARK_COLOURS = ("#e9c46a", "#a3c48f", "#e8907a", "#9dbcd0")
+
+
+def _bg(t: Any, img: Callable[[str], str]) -> str:
+    """A tile's thumbnail (else the person's picture) as a CSS background for the frame's <i>."""
+    src = img(t.thumb) or img(t.avatar)
+    return f"background-image:url(&quot;{_e(src)}&quot;)" if src else ""
+
+
+def _length(t: Any) -> str:
+    return hm(t.length) if t.kind == "past" and t.end else "LIVE" if t.kind == "live" else "scheduled"
+
+
+def _chip(text: str, fs: int, clark: bool, block: bool = False) -> str:
+    """The time label: Colette's pink pill, Clark's dark brown tab with cream serif letters."""
+    look = ("background:#3b2416;color:#f4ead8;font-family:'DejaVu Serif',serif;border-radius:6px" if clark else
+            "background:#f72ca2;color:#fff;border-radius:30px")
+    size = "width:100%" if block else "width:150px;flex:none"
+    return (f'<div style="{size};{look};font-weight:900;font-size:{fs}px;text-align:center;padding:5px 0">'
+            f'{_e(text)}</div>')
+
+
+def _strip(t: Any, k: int, h: int, w: int, clark: bool, img: Callable[[str], str], tz: Any, tilt: float,
+           flip: bool = False) -> str:
+    """One coloured strip (columns and zigzag layouts): time chip, thumbnail, name · length, title.
+    ``flip``: the thumbnail on the right (zigzag's every other row)."""
+    pal = CLARK_COLOURS if clark else COLETTE_COLOURS
+    fs = max(16, min(30, h // 4))
+    narrow = w < 800                    # a two-column strip: smaller picture and chip, more room for the name
+    thumb_w = int((h - 16) * (0.72 if narrow else 1) * 16 / 9)
+    chip_w = 100 if narrow else 150
+    fs = min(fs, 24) if narrow else fs
+    text = (f'<div style="min-width:0;flex:1"><div class=nm style="font-size:{fs + 2}px;white-space:nowrap;overflow:hidden;'
+            f'text-overflow:ellipsis">{_e(t.name)}<span style="font-size:{fs - 4}px;color:#5a2a3a;font-weight:700">'
+            f' · {_e(_length(t))}</span></div><div style="font-size:{fs - 6}px;color:#3a3028;white-space:nowrap;'
+            f'overflow:hidden;text-overflow:ellipsis">{_e((t.title or t.game or "")[:90])}</div></div>')
+    pic = f'<div class=fr style="width:{thumb_w}px;padding:4px;flex:none"><i style="{_bg(t, img)}">{_plats(t)}</i></div>'
+    chip = _chip(clock(t.at, tz), fs, clark).replace("width:150px", f"width:{chip_w}px")
+    inner = chip + (text + pic if flip else pic + text)
+    return (f'<div style="display:flex;align-items:center;gap:18px;width:{w}px;height:{h}px;background:{pal[k % len(pal)]};'
+            f'padding:8px 16px;border-radius:{4 if clark else 0}px;transform:rotate({tilt}deg);box-shadow:3px 5px 12px #0007;'
+            f'color:#2a2116">{inner}</div>')
 SPOT_MAX = 6            # small pictures beside a spotlight day picture's big one
