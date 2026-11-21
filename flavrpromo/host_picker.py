@@ -96,9 +96,11 @@ async def ready(poster: Any, group: str, label: str, start_iso: str) -> Optional
     return None
 
 
-def start_ai(poster: Any, k: str) -> bool:
+def start_ai(poster: Any, k: str, only: tuple = ()) -> bool:
     """Ask KoboldCpp (poster.kobold, None = KOBOLD_URL not set) for lines for pending review ``k`` in
-    the background; False when it can't (not set up, or already writing for it)."""
+    the background; False when it can't (not set up, or already writing for it). ``k`` can also be
+    an article editor draft (flavrpromo/article_editor.py: the same shape), and ``only`` limits the
+    slots (kobold.Kobold.write; () = all)."""
     kob = getattr(poster, "kobold", None)
     if kob is None or (k in _tasks and not _tasks[k].done()):
         return False
@@ -107,17 +109,17 @@ def start_ai(poster: Any, k: str) -> bool:
         return False
     p["ai_state"] = "writing"
     poster.store.put(k, p)
-    _tasks[k] = asyncio.get_running_loop().create_task(_write(poster, k, p["host"]))
+    _tasks[k] = asyncio.get_running_loop().create_task(_write(poster, k, p["host"], only))
     return True
 
 
-async def _write(poster: Any, k: str, host: str) -> None:
+async def _write(poster: Any, k: str, host: str, only: tuple = ()) -> None:
     """The background half of ``start_ai``: new lines go first in each slot (marked in p["ai"])."""
     store = poster.store
     p = store.get(k) or {}
     try:
-        got = await poster.kobold.write(host, p.get("facts") or {}, HEADINGS.get(p.get("label"), "review"),
-                                        p.get("notes") or [])
+        got = await poster.kobold.write(host, p.get("facts") or {}, heading_of(p, "review"),
+                                        p.get("notes") or [], **({"only": only} if only else {}))
     except Exception:
         log.exception("KoboldCpp lines failed")
         got = {}
@@ -154,13 +156,21 @@ def chosen(p: Dict[str, Any], slot: str) -> str:
     return c[0] if c else ""
 
 
+def heading_of(p: Dict[str, Any], fallback: str = "In Review") -> str:
+    """The card heading: an article draft's own (p["heading"], "This Week"), else the review's."""
+    return p.get("heading") or HEADINGS.get(p.get("label") or "", fallback)
+
+
 def card_html(p: Dict[str, Any], card: str) -> str:
+    """The opener or desk card for pending review (or article draft) ``p``. p["pose"] (article
+    editor) picks the opener pose by hand; else it follows the facts (hosts.pose)."""
     key, f = p["host"], p.get("facts") or {}
     if card == "opener":
         notes = p.get("notes") or []
-        return host_cards.opener(key, HEADINGS.get(p["label"], "In Review"), str(f.get("range") or ""),
+        pose = p.get("pose") if p.get("pose") in hosts.POSES else hosts.pose(f)
+        return host_cards.opener(key, heading_of(p), str(f.get("range") or ""),
                                  chosen(p, "opener"), notes, [chosen(p, f"note{i}") for i in range(len(notes))],
-                                 hosts.pose(f), p.get("opener_kind") == "chibi")
+                                 pose, p.get("opener_kind") == "chibi")
     return host_cards.desk(key, chosen(p, "desk_highlight"), chosen(p, "desk_nudge"), chosen(p, "desk_signoff"),
                            p.get("desk_kind") or "desk")
 

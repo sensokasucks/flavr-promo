@@ -14,8 +14,14 @@ example exchanges, then one request per slot ("Facts: ... Write 3 opener lines."
 for a JSON list of strings; anything else in the answer is ignored. Lines are checked (no @, no
 links, no blanks left, at most MAX_CHARS) before they reach the page.
 
+The owner can edit both on the settings page (flavrpromo/card_page.py, /settings/cards): a card's
+text fields are saved in kv "host_cards" ({host: {field: text}}) and the slot asks in kv
+"kobold_asks" ({slot: text}); ``load_card_overrides`` puts them in force, and ``card`` / ``asks``
+return the edited text over the built-in one. An emptied field goes back to the built-in text.
+
 Who calls it: flavrpromo/host_picker.py (``write`` when a review starts waiting and on the page's
-"Write more" button, ``status`` for the page), flavrpromo/__main__.py makes one.
+"Write more" button, ``status`` for the page), flavrpromo/article_editor.py (new host lines for an
+article section), flavrpromo/__main__.py makes one.
 """
 
 from __future__ import annotations
@@ -45,12 +51,47 @@ ASKS = {
 }
 
 
-def card(key: str) -> Dict[str, Any]:
-    """The host's character card data ({} when missing)."""
+# the card fields the settings page edits, in the order the prompt uses them, with a short help line
+# (flavrpromo/card_page.py shows them; the rest of card.json, like tags, stays as built in)
+CARD_FIELDS = {
+    "system_prompt": "First line of every prompt: who they are and the rules. {{char}} = their name.",
+    "description": "Who they are: look, job, background.",
+    "personality": "How they talk.",
+    "scenario": "Where they are and what they're doing when they speak.",
+    "mes_example": "Example exchanges, each starting with <START>; {{user}} is the producer asking.",
+    "post_history_instructions": "Added after the facts in every request (the JSON list rule lives here).",
+}
+_card_edits: Dict[str, Dict[str, str]] = {}     # kv host_cards, loaded by load_card_overrides
+_ask_edits: Dict[str, str] = {}                 # kv kobold_asks
+
+
+def builtin_card(key: str) -> Dict[str, Any]:
+    """The card as built in (flavrpromo/host_art/<key>/card.json), {} when missing."""
     try:
         return json.loads((CARDS / key / "card.json").read_text(encoding="utf-8")).get("data") or {}
     except (OSError, ValueError):
         return {}
+
+
+def card(key: str) -> Dict[str, Any]:
+    """The host's character card data with the settings page's edits on top ({} when missing)."""
+    c = dict(builtin_card(key))
+    c.update({f: v for f, v in (_card_edits.get(key) or {}).items() if f in CARD_FIELDS and v.strip()})
+    return c
+
+
+def asks() -> Dict[str, str]:
+    """What each slot asks for (ASKS) with the settings page's edits on top."""
+    return {s: (_ask_edits.get(s) or "").strip() or a for s, a in ASKS.items()}
+
+
+def load_card_overrides(store: Any) -> None:
+    """Put the settings page's card and ask edits in force (flavrpromo/settings_page.py ``apply`` at
+    start, flavrpromo/card_page.py after a save)."""
+    _card_edits.clear()
+    _card_edits.update({k: dict(v) for k, v in (store.get("host_cards") or {}).items() if isinstance(v, dict)})
+    _ask_edits.clear()
+    _ask_edits.update({k: str(v) for k, v in (store.get("kobold_asks") or {}).items() if k in ASKS})
 
 
 def facts_text(f: Dict[str, Any]) -> str:
@@ -80,6 +121,15 @@ def prompt(key: str, ask: str, facts: str) -> str:
                      if x.strip())
     return (f"{head}\n{sub(c.get('mes_example'))}\n<START>\nProducer: Facts: {facts} {ask} "
             f"{sub(c.get('post_history_instructions'))}\n{name}: [")
+
+
+def fill_ask(ask: str, n: int, heading: str) -> str:
+    """One slot's ask with {n} and {heading} filled in. An edited ask with a stray brace is used as
+    typed instead of failing (format would raise)."""
+    try:
+        return ask.format(n=n, heading=heading.lower())
+    except (KeyError, IndexError, ValueError):
+        return ask.replace("{n}", str(n)).replace("{heading}", heading.lower())
 
 
 def parse(text: str) -> List[str]:
@@ -140,16 +190,21 @@ class Kobold:
             return None
 
     async def write(self, key: str, facts: Dict[str, Any], heading: str,
-                    notes: List[Dict[str, str]]) -> Dict[str, List[str]]:
-        """New lines for every slot of a review: {slot: [lines]} (empty slots left out; {} when offline)."""
+                    notes: List[Dict[str, str]], only: tuple = ()) -> Dict[str, List[str]]:
+        """New lines for every slot of a review: {slot: [lines]} (empty slots left out; {} when offline).
+        ``only``: slot name starts to ask for (("opener", "note") = the opener card's slots; the
+        article editor's host sections), () = all."""
         text = facts_text(facts)
-        asks = [("opener", ASKS["opener"])]
-        asks += [(f"note{i}", ASKS["note"].replace("{note}", f"{n['label'].lower()}: {n['value']}"))
+        a = asks()
+        todo = [("opener", a["opener"])]
+        todo += [(f"note{i}", a["note"].replace("{note}", f"{n['label'].lower()}: {n['value']}"))
                  for i, n in enumerate(notes)]
-        asks += [(s, ASKS[s]) for s in ("desk_highlight", "desk_nudge", "desk_signoff")]
+        todo += [(s, a[s]) for s in ("desk_highlight", "desk_nudge", "desk_signoff")]
+        if only:
+            todo = [(s, x) for s, x in todo if any(s.startswith(o) for o in only)]
         out: Dict[str, List[str]] = {}
-        for slot, ask in asks:
-            got = await self.generate(prompt(key, ask.format(n=self.per_slot, heading=heading.lower()), text))
+        for slot, ask in todo:
+            got = await self.generate(prompt(key, fill_ask(ask, self.per_slot, heading), text))
             if got is None:
                 break                       # offline or failing: stop asking for this review
             lines = parse(got)
