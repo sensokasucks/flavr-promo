@@ -45,6 +45,8 @@ up to an hour to show the first time):
     /setup share-style style [bold_days] [hashtags]   the X text's default layout (post + links reply /
                         one post / 280 thread), bold-looking day headings, a hashtag line
     /friend x name handle   their X handle ("-" removes it); tagged only with /setup share-style tag_people
+    /friend signoff add name line [emoji] | remove name number | list name   the lines someone ends their
+                        stream with; one goes on each "was live" card (flavrpromo/signoff.py)
   Community calendar (flavrpromo/promo.py): streams members add from their self-promo posts
     message menu (long-press / right-click a post → Apps) "Add to community calendar" and
         "Remove from community calendar": your own posts with an allowed role; moderators any post
@@ -55,7 +57,7 @@ up to an hour to show the first time):
                         someone's own channel: go-live cards there too, a pinned week card, their recap;
                         /live, /schedule, /calendar view|share used there show only them
     /me schedule day time [title] | unschedule | main platform | x handle | hide [hidden] |
-        posts [group_channel] [own_channel] | share [week]     the linked person's own entry
+        posts [group_channel] [own_channel] | share [week] | signoff add|remove|list   the linked person's own entry
   Owner only (answers only you can see)
     /status             the go-live watcher and this PC
     /pings view | set kind on | quiet start end          DM switches (friends, calendar, share) and quiet hours
@@ -81,7 +83,7 @@ from discord import app_commands
 from . import focus, sysinfo
 from .calendar import DAY_NAMES, REVIEW_NAMES
 from .config import Settings
-from . import promo, talent
+from . import promo, signoff, talent
 from .pings import KINDS, Pinger, length
 from .share import X_STYLES
 from . import groups
@@ -351,6 +353,7 @@ class PromoBot(discord.Client):
             log.info("couldn't edit a go-live card: %s", e)
 
     async def post_end(self, person, session) -> None:
+        line = signoff.pick(self.store, person["id"], session.get("id"))
         for msg in await self._messages(session):
             e = msg.embeds[0] if msg.embeds else discord.Embed()
             e.title = f"{person['name']} was live"
@@ -359,6 +362,9 @@ class PromoBot(discord.Client):
             # the VOD the watcher found (flavrpromo/watcher.py find_vod: Twitch archive / YouTube stream page)
             if session.get("vod_url"):
                 e.add_field(name="VOD", value=f"[Watch the VOD]({session['vod_url']})", inline=False)
+            if line is not None:
+                # their sign-off line (flavrpromo/signoff.py; one per stream, never the same twice in a row)
+                e.add_field(name="\u200b", value=f"*{signoff.text(line)}*"[:1024], inline=False)
             await self._edit(msg, embed=e)
 
     # ── commands ───────────────────────────────────────────────────────
@@ -681,6 +687,8 @@ class PromoBot(discord.Client):
                 bot.calendar.poke()
             await inter.response.send_message(f"{p['name']} is in {groups.name(g)} now.", ephemeral=True)
 
+        # /friend signoff add|remove|list (flavrpromo/signoff.py)
+        signoff.register_friend(friend, bot, managers_only, person_auto)
         tree.add_command(friend)
 
         # /group: make your own groups next to FlaVR and Friends (flavrpromo/groups.py keeps the list).

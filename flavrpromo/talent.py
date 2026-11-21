@@ -15,8 +15,8 @@ What a talent channel gets, once /talent channel picks it:
                   her (``person_for_channel``); everywhere else they work as before.
 
 Linking a Discord account (/talent link) lets that person run /me: their own weekly times, main
-platform, X handle, calendar hide (vacation), where their go-live cards go, and their own share
-text. /me only ever touches the linked person; groups and server settings stay with the owner and
+platform, X handle, calendar hide (vacation), where their go-live cards go, their own share
+text and their sign-off lines (/me signoff, flavrpromo/signoff.py). /me only ever touches the linked person; groups and server settings stay with the owner and
 Manage Server (who can do all of it with /talent and /friend).
 
 Saved: people.talent_channel / discord_user / live_group / live_own (flavrpromo/store.py), and in kv
@@ -38,6 +38,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 import discord
 from discord import app_commands
 
+from . import signoff
 from .calendar import Week
 from .store import PLATFORMS, Store
 
@@ -278,6 +279,9 @@ def register(tree: app_commands.CommandTree, bot: Any,
         if not p:
             await say(inter, "Your account isn't linked to anyone yet. Ask a mod to run /talent link.")
         return p
+
+    # /me signoff add|remove|list: their own sign-off lines (flavrpromo/signoff.py)
+    signoff.register_me(me, store, mine)
 
     @me.command(name="schedule", description="Add a regular weekly stream time (for the calendar)")
     @app_commands.choices(day=day_choices)
