@@ -97,7 +97,17 @@ def load_card_overrides(store: Any) -> None:
 
 
 def facts_text(f: Dict[str, Any]) -> str:
-    """A review's facts (flavrpromo/hosts.py ``facts``) as the plain sentence the card's examples use."""
+    """A review's facts (flavrpromo/hosts.py ``facts``) as the plain sentence the card's examples use.
+    The Sunday preview's facts (hosts.preview_facts, ``preview`` True) read as the week ahead."""
+    if f.get("preview"):
+        parts = [f"the week ahead has {f.get('planned_text') or '0 streams'} planned by {f.get('people', 0)} people"]
+        if f.get("first_name"):
+            parts.append(f"first up {f['first_name']} on {f['first_day']} at {f['first_time']}")
+        if f.get("busy_day"):
+            parts.append(f"busiest day {f['busy_day']} with {f['busy_count']} streams")
+        if f.get("most_name"):
+            parts.append(f"{f['most_name']} has {f['most_count']} streams planned")
+        return ", ".join(parts) + "."
     parts = [f"{f.get('streams', 0)} streams", f"{f.get('hours', 0)} hours"]
     if f.get("top_name") and int(f.get("top_count") or 0) > 1:
         parts.append(f"{f['top_name']} did {f['top_count']} shows")

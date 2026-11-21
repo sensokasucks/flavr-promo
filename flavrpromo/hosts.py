@@ -21,8 +21,9 @@ This file holds who the hosts are, their pictures, which one presents a post, an
   * Lines: TEMPLATES per host and situation ("slot"), with blanks filled from real numbers
     (``facts``). A template whose blank has no value is skipped, so a line never says "{name}".
     Go-live cards use one at random (they can't wait). Reviews wait for the owner to pick from
-    several on the picker page (flavrpromo/host_picker.py); KoboldCpp lines join them in a later
-    round.
+    several on the picker page (flavrpromo/host_picker.py), and so does the Sunday preview's
+    week-ahead opener (``preview_facts`` / ``preview_candidates``, the "ahead_*" slots); KoboldCpp
+    lines join them there.
 
 Who calls it: flavrpromo/bot.py (live cards, /host commands), flavrpromo/host_picker.py (reviews),
 flavrpromo/__main__.py (``init`` with the pictures folder).
@@ -55,6 +56,7 @@ MAX_PICTURE = 8 * 1024 * 1024       # bytes; one uploaded picture
 LONG_STREAM = 4 * 3600.0            # a stream this long gets the "long stream" end line (s)
 BUSY_STREAMS, BUSY_HOURS = 8, 20    # a review this full is "busy" (happy pose, busy opener)
 QUIET_STREAMS = 2                   # this few streams or fewer is "quiet" (sleepy pose)
+BUSY_PLANNED = 6                    # a Sunday preview with this many planned streams is "busy"
 
 _folder: Optional[Path] = None      # DATA_DIR/hosts (set by flavrpromo/__main__.py; None in tests = no pictures)
 # the built-in pictures (owner's art, 2026-11-21, transparent WebP, flavrpromo/host_art/<host>/<kind>.webp);
@@ -165,6 +167,8 @@ def pictures(key: str) -> Dict[str, str]:
 # {longest_name} {longest_len} {quiet_day} {quiet_name} {new_game} {new_game_name} {other} {streams_text} ("1 stream")
 # go-live: {genre} (live_new_genre, IGDB's first genre)
 # day posts: {when} ("Today", "This weekend") {when_lower} {count} {first_name} {first_time}
+# Sunday preview: {planned} {planned_text} ("5 streams") {people} {busy_day} {busy_count} {first_name}
+# {first_day} ("Monday") {first_time} ("8 PM") {most_name} {most_count}
 TEMPLATES: Dict[str, Dict[str, List[str]]] = {
     "colette": {
         "live_start": ["{name} is LIVE!! Grab a coffee and get in here! ☕", "Drop everything, {name} just went live!!",
@@ -199,6 +203,20 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
         "desk_nudge": ["Haven't seen {quiet_name} in a while. Go say hi!", "Next time: more {quiet_name}, please!",
                        "Next time? Bigger. Louder. More caffeine."],
         "desk_signoff": ["Colette out! ☕", "See you next time, team! Colette out!", "Refilling my mug. Bye bye!! ☕"],
+        # the Sunday preview's opener card (flavrpromo/host_picker.py, label "preview"; ``preview_facts``)
+        "ahead_busy": ["NEW WEEK!! ☕ {planned_text} on the board already, {people} people! {busy_day} is stacked!",
+                       "Okay team, the week ahead is PACKED: {planned_text}! First up, {first_name} on {first_day}!",
+                       "{planned_text} lined up?! I'm brewing a double. Here's your week!!"],
+        "ahead_normal": ["New week, new board!! {planned_text} so far. First up: {first_name}, {first_day} at {first_time}! ☕",
+                         "Hi hi! {planned_text} on the board this week. Mark your calendars, team!",
+                         "Fresh week! {people} people have streams lined up. Coffee's on! ☕"],
+        "ahead_quiet": ["The board's looking cozy: {planned_text} so far. More coming, I can feel it! ☕",
+                        "Just {planned_text} on the board yet, starting with {first_name}! Keep an eye out!"],
+        "ahead_empty": ["Brand new week and the board's empty! Streams pop up as people schedule them. ☕",
+                        "Nothing on the board yet! I'll keep the coffee warm while everyone plans."],
+        "note_busy_day": ["the big day!!", "clear your schedule!", "triple shot required"],
+        "note_first_up": ["kicking it off!", "be there!!", "first coffee of the week"],
+        "note_most_planned": ["busy bee!!", "so many shows!", "employee of the week already?!"],
         "day_one": ["{when}: {first_name} at {first_time}! Mark it, team!! ☕", "Just one on the board {when_lower}: {first_name}! Show some love!"],
         "day_many": ["{count} streams {when_lower}!! Starting with {first_name} at {first_time}! ☕",
                      "{when}: {count} streams lined up! Coffee's on, I'll see you there!!",
@@ -261,6 +279,19 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
                        "For next time: clip your favourite moments. The archive thanks you."],
         "desk_signoff": ["Cider's on. — Clark", "Filed and closed. — Clark", "Until next time. — Clark",
                          "Be kind, rewind. — Clark", "Away message: filing VODs, back soon. — Clark"],
+        "ahead_busy": ["Good morning. The week ahead: {planned_text} on file from {people} people. {busy_day} is the big one.",
+                       "{planned_text} scheduled. I've labelled a fresh tape for each. {first_name} opens on {first_day}.",
+                       "A full week of Anime Americans: {planned_text}. Best job in the building."],
+        "ahead_normal": ["Good morning. {planned_text} on the schedule so far. {first_name} opens, {first_day} at {first_time}.",
+                         "The week ahead, filed: {planned_text}. Details below. Cider is on.",
+                         "New week. {people} people on the schedule. I've set the VCR accordingly."],
+        "ahead_quiet": ["The schedule is light so far: {planned_text}. More will be filed as it comes in.",
+                        "{planned_text} on file yet. {first_name} leads off. I'll keep the binder open."],
+        "ahead_empty": ["No streams on file for the week yet. They'll be added as they're scheduled.",
+                        "The schedule is blank for now. A clean page. I've sharpened my pencil."],
+        "note_busy_day": ["the busiest day", "a full folder", "two tapes needed"],
+        "note_first_up": ["first entry of the week", "opening the file", "VCR set"],
+        "note_most_planned": ["most on file", "remarkably prolific", "a rare holo card"],
         "day_one": ["{when}: {first_name} at {first_time}. Noted.", "One stream on file {when_lower}: {first_name}, {first_time}.",
                     "{when}: {first_name} at {first_time}. Setting the VCR now."],
         "day_many": ["{when}: {count} streams on file. {first_name} opens at {first_time}.",
@@ -274,7 +305,8 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
 # every blank a template may use (the settings page refuses others, so a line never shows "{oops}")
 BLANKS = ("name", "game", "tag", "length", "signoff", "genre", "streams", "streams_text", "hours", "top_name",
           "top_count", "longest_name", "longest_len", "quiet_day", "quiet_name", "new_game", "new_game_name",
-          "when", "when_lower", "count", "first_name", "first_time")
+          "when", "when_lower", "count", "first_name", "first_time",
+          "planned", "planned_text", "people", "busy_day", "busy_count", "first_day", "most_name", "most_count")
 # what each slot is for, and its useful blanks (the settings page's help text)
 SLOT_HELP = {
     "live_start": "go-live, no game known: {name}",
@@ -297,6 +329,13 @@ SLOT_HELP = {
     "desk_highlight": "desk card highlight: {longest_name} {longest_len} {top_name} {top_count} {new_game} {new_game_name}",
     "desk_nudge": "desk card 'next time': {quiet_name}",
     "desk_signoff": "desk card sign-off",
+    "ahead_busy": "Sunday preview opener, 6+ planned: {planned_text} {people} {busy_day} {busy_count} {first_name} {first_day} {first_time}",
+    "ahead_normal": "Sunday preview opener: {planned_text} {people} {first_name} {first_day} {first_time} {most_name} {most_count}",
+    "ahead_quiet": "Sunday preview opener, 1-2 planned: {planned_text} {first_name} {first_day} {first_time}",
+    "ahead_empty": "Sunday preview opener, nothing scheduled yet",
+    "note_busy_day": "short comment on the busiest day note (preview)",
+    "note_first_up": "short comment on the first up note (preview)",
+    "note_most_planned": "short comment on the most planned note (preview)",
     "day_one": "day post with one stream: {when} {when_lower} {first_name} {first_time}",
     "day_many": "day post with more: {when} {when_lower} {count} {first_name} {first_time}",
 }
@@ -481,4 +520,64 @@ def review_candidates(key: str, f: Dict[str, Any]) -> Dict[str, List[str]]:
     out["desk_highlight"] = lines(key, "desk_highlight", f)
     out["desk_nudge"] = lines(key, "desk_nudge", f)
     out["desk_signoff"] = lines(key, "desk_signoff", f)
+    return out
+
+
+# ── the Sunday preview (owner 2026-11-21: the week ahead gets a host opener card too) ──────
+def _clock(t: float, tz: Any) -> str:
+    """"8 PM" / "7:30 PM" for a start time."""
+    d = datetime.fromtimestamp(t, tz)
+    return f"{(d.hour % 12) or 12}{':%02d' % d.minute if d.minute else ''} {'AM' if d.hour < 12 else 'PM'}"
+
+
+def preview_facts(week: Any) -> Dict[str, Any]:
+    """The numbers the Sunday preview's lines and opener card use, from this week's board (``Week``,
+    flavrpromo/calendar.py, not a review): what's planned (scheduled, live and already streamed
+    tiles all count), by how many people, the busiest day, who's first up and who planned most.
+    ``preview`` True tells kobold.facts_text and the picker these are preview facts."""
+    tiles = sorted(week.tiles(), key=lambda t: t.at)
+    names = Counter(t.name for t in tiles)
+    out: Dict[str, Any] = {"preview": True, "planned": len(tiles), "range": week.range_text,
+                           "planned_text": f"{len(tiles)} stream{'' if len(tiles) == 1 else 's'}",
+                           "people": len(names), "streams": len(tiles)}
+    per_day = [len(d) for d in week.days]
+    if per_day and max(per_day) > 1:
+        i = per_day.index(max(per_day))
+        out["busy_day"], out["busy_count"] = week.date_of(i).strftime("%A"), per_day[i]
+    ahead = [t for t in tiles if t.at >= week.now - 3600] or tiles
+    if ahead:
+        first = ahead[0]
+        out["first_name"] = first.name
+        out["first_day"] = datetime.fromtimestamp(first.at, week.tz).strftime("%A")
+        out["first_time"] = _clock(first.at, week.tz)
+    if names and names.most_common(1)[0][1] > 1:
+        out["most_name"], out["most_count"] = names.most_common(1)[0]
+    return out
+
+
+def preview_mood(f: Dict[str, Any]) -> str:
+    """"busy" / "normal" / "quiet" / "empty" for a Sunday preview (by planned streams)."""
+    n = int(f.get("planned") or 0)
+    return "empty" if not n else "busy" if n >= BUSY_PLANNED else "quiet" if n <= QUIET_STREAMS else "normal"
+
+
+def preview_notes(f: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Up to 3 sticky notes / table rows for the preview opener (same shape as ``notes``)."""
+    out = []
+    if f.get("first_name"):
+        out.append({"label": "FIRST UP", "value": f"{f['first_name']} · {f['first_day'][:3]} {f['first_time']}",
+                    "slot": "note_first_up"})
+    if f.get("busy_day"):
+        out.append({"label": "BUSIEST DAY", "value": f"{f['busy_day']} · {f['busy_count']} streams", "slot": "note_busy_day"})
+    if f.get("most_name"):
+        out.append({"label": "MOST PLANNED", "value": f"{f['most_name']} · {f['most_count']}", "slot": "note_most_planned"})
+    return out[:3]
+
+
+def preview_candidates(key: str, f: Dict[str, Any]) -> Dict[str, List[str]]:
+    """The preview's slots (opener + one per note; no desk card) and their candidate lines."""
+    out = {"opener": lines(key, f"ahead_{preview_mood(f)}", f) or lines(key, "ahead_normal", f)
+           or lines(key, "ahead_empty", f)}
+    for i, n in enumerate(preview_notes(f)):
+        out[f"note{i}"] = lines(key, n["slot"], f)
     return out

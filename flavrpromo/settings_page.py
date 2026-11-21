@@ -12,7 +12,8 @@ Sections (each its own form; a save redirects back with a note):
               KOBOLD_URL / KOBOLD_KEY from the environment (an empty address there = off).
   Hosts       on / off and "take turns" or always one host: the same kv as /host setup
               (hosts_on, hosts_only); "post go-live cards as the host" (kv hosts_webhook, default on,
-              flavrpromo/host_webhooks.py; needs the bot's Manage Webhooks in the live channels).
+              flavrpromo/host_webhooks.py; needs the bot's Manage Webhooks in the live channels); how
+              long the Sunday board waits for the week-ahead picks (kv host_preview_wait, hours).
   Pictures    every picture kind for both hosts with a preview, upload to replace one (the same
               as /host picture) and "back to built-in" (deletes the upload).
   Lines       every template slot for both hosts as a text box, one line per row; a blank that
@@ -32,7 +33,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from . import hosts, kobold
+from . import host_picker, hosts, kobold
 from .kobold import PER_SLOT, Kobold
 
 log = logging.getLogger("flavrpromo.settings_page")
@@ -72,6 +73,7 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
     only = str(store.get("hosts_only") or "")
     on = bool(store.get("hosts_on"))
     as_host = store.get("hosts_webhook") is not False      # flavrpromo/host_webhooks.py SETTING, default on
+    wait = host_picker.preview_wait(store)                  # kv host_preview_wait (hours, 0 = for ever)
     # KoboldCpp
     kob = (f'<section id=kobold><h2>✨ KoboldCpp (AI lines)</h2>'
            f'<p class=help>Lines in each host\'s voice on the review picker page. Empty address = template lines only.</p>'
@@ -94,6 +96,8 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
            + f'<label><input type=checkbox name=webhook value=1{" checked" if as_host else ""}> Post go-live cards as '
            f'the host (their name and face; needs the bot\'s Manage Webhooks permission in the live channels, '
            f'otherwise the bot posts them as before)</label>'
+           f'<label>Sunday board waits <input name=preview_wait type=number min=0 max=48 step=0.5 value="{wait:g}" '
+           f'style="width:5em"> hours for the week-ahead picks, then posts without the host <small>(0 = wait for ever)</small></label>'
            + '<p><button>Save</button> <a href="/hosts/pick">Open the line picker</a></p></form></section>')
     # pictures
     cells = []
@@ -203,6 +207,10 @@ def add_routes(app: web.Application, poster: Any) -> None:
         only = str(form.get("only") or "")
         store.put("hosts_only", only if only in hosts.HOSTS else "")
         store.put("hosts_webhook", bool(form.get("webhook")))   # flavrpromo/host_webhooks.py SETTING
+        try:                                                    # flavrpromo/host_picker.py preview_wait
+            store.put("host_preview_wait", min(48.0, max(0.0, float(str(form.get("preview_wait") or host_picker.PREVIEW_WAIT)))))
+        except ValueError:
+            pass
         raise _back("Hosts saved.", "hosts")
 
     async def save_picture(request: web.Request) -> web.Response:
