@@ -48,7 +48,8 @@ class Server:
         self._runner: Optional[web.AppRunner] = None
 
     def app(self) -> web.Application:
-        app = web.Application()
+        # 10 MB request bodies: the settings page's picture uploads (hosts.MAX_PICTURE 8 MB, flavrpromo/settings_page.py)
+        app = web.Application(client_max_size=10 * 1024 * 1024)
         app.router.add_get("/health", self._health)
         app.router.add_get("/live.json", self._live)
         for add in self.extra_routes:

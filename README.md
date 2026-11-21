@@ -30,8 +30,19 @@ Only official, documented platform APIs are used, at a polite pace (Twitch every
 call for up to 100 people, YouTube RSS + one API call every 10 minutes, Kick every 3 minutes).
 The bot needs no privileged Discord intents.
 
-Planned (plan doc "FlaVR Bot presenter plan"): host lines written by KoboldCpp (on its own PC) next
-to the templates on the picker page, and Steam look-ups for game details.
+**Settings page:** `http://<this PC>:3871/settings` (home network only, like the other pages): the
+KoboldCpp address, password, creativity and lines per slot with a Test button (saved there, they win
+over `KOBOLD_URL` / `KOBOLD_KEY`), hosts on / off, every host picture with upload and "back to
+built-in", and every host line slot for both hosts as editable text.
+
+**AI lines (optional):** with `KOBOLD_URL` pointing at KoboldCpp (any PC at home, a model loaded;
+`KOBOLD_KEY` if started with `--password`), the picker page also shows lines it writes in each host's
+voice from their character cards (`flavrpromo/host_art/<host>/card.json`, the same cards work in
+SillyTavern), marked ✨ and first in each slot, with a **Write more** button. Offline = template lines.
+
+**Game details:** with the Twitch keys set, each game streamed is looked up once in IGDB (Twitch's
+official game database): the go-live card links it (Steam page when it has one) and shows its genres,
+a host's new-game line can name the genre, and KoboldCpp gets a short summary of new games.
 
 ## Set up
 
@@ -70,7 +81,7 @@ Code map: `flavrpromo/__main__.py` (start-up and wiring), `config.py` (environme
 server, `/health`, `/live.json`), `pings.py` (your DMs), `watcher.py` + `platforms/` (go-live),
 `bot.py` (Discord), `sysinfo.py`; the calendar is `calendar.py` (which streams go on which day),
 `render.py` (the HTML board and its picture, Playwright Chromium), `calendar_post.py` (Discord posts,
-reviews, pings), `focus.py` (day posts), `share.py` (Discord / X text), `signoff.py` (sign-off lines), `games.py` (game history and tags), `hosts.py` +
+reviews, pings), `focus.py` (day posts), `share.py` (Discord / X text), `signoff.py` (sign-off lines), `games.py` (game history and tags), `gameinfo.py` (IGDB game details), `kobold.py` (KoboldCpp lines), `settings_page.py` (/settings), `hosts.py` +
 `host_cards.py` + `host_picker.py` (Colette and Clark, their cards, the review line picker), `talent.py`, `promo.py`
 (community calendar), `groups.py` and `web.py` (page, picture, .ics, X Article). The calendar
 picture needs `playwright install chromium` outside Docker (or `CHROMIUM_PATH`); without it posts
