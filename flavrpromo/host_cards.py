@@ -17,6 +17,10 @@ picture the card still works: the bubble / report just gets the whole width. All
           clipped photos on a cream report page. Their chibi sits in a corner with a line about the
           day (hosts.day_line). Same 1600 x 900 and the same tile sizes as render.day_card.
 
+  cover   the X Article cover (1500 x 600, like render.cover) in the host's look (owner 2026-11-21:
+          "the article cover is still in the old style when the hosts are on"): heading and numbers,
+          the people's pictures as coloured cards, the host standing on the right.
+
 Who calls it: flavrpromo/host_picker.py (the review posts and the picker page's previews) and /host
 preview (flavrpromo/bot.py).
 """
@@ -28,7 +32,7 @@ from datetime import timedelta
 from typing import Any, Callable, Dict, List
 
 from . import hosts
-from .render import DAY_MAX, _plats, clock, hm, logo_data_url, tile_layout
+from .render import COVER_H, COVER_W, DAY_MAX, _plats, clock, cover_people, cover_stats, hm, logo_data_url, tile_layout
 
 BASE = ("*{box-sizing:border-box;margin:0}"
         "body{width:1600px;height:900px;position:relative;overflow:hidden;font-family:'DejaVu Sans',sans-serif}"
@@ -491,3 +495,48 @@ def _strip(t: Any, k: int, h: int, w: int, clark: bool, img: Callable[[str], str
             f'padding:8px 16px;border-radius:{4 if clark else 0}px;transform:rotate({tilt}deg);box-shadow:3px 5px 12px #0007;'
             f'color:#2a2116">{inner}</div>')
 SPOT_MAX = 6            # small pictures beside a spotlight day picture's big one
+
+
+def cover(key: str, week: Any, img: Callable[[str], str], heading: str, figure: str = "") -> str:
+    """The X Article cover in host ``key``'s look, COVER_W x COVER_H (screenshot with that size).
+    ``heading``: "Week in Review", "This Week" ... ; ``figure``: which host picture stands on the right
+    (a hosts.KINDS kind; default their happy pose). The people and their numbers are render.cover's
+    (cover_people / cover_stats). Called by flavrpromo/article_editor.py (/settings/article/cover)."""
+    clark = key == "clark"
+    pic = hosts.data_url(key, figure or "happy") or hosts.data_url(key, "chibi_happy")
+    if week.recap:
+        stats = f"{week.stream_count} streams · {week.hours_live:.0f} hours live"
+    else:
+        stats = f"{sum(len(d) for d in week.days)} streams this week"
+    pal = CLARK_COLOURS if clark else COLETTE_COLOURS
+    cards = "".join(
+        f'<div class=cc style="background:{pal[k % len(pal)]};{"" if clark else f"transform:rotate({TILT[k % len(TILT)]});"}">'
+        f'<i style="{_bg(r["tile"], img)}"></i><b>{_e(r["tile"].name)}</b><span>{_e(cover_stats(r, week.recap))}</span></div>'
+        for k, r in enumerate(cover_people(week)))
+    fig = (f'<img src="{pic}" style="position:absolute;right:20px;bottom:0;height:{COVER_H - 20}px;max-width:300px;'
+           f'object-fit:contain;object-position:bottom">' if pic else "")
+    grid_w = COVER_W - 480 - (330 if pic else 60)
+    css = (f"body{{width:{COVER_W}px;height:{COVER_H}px}}"
+           f".g{{position:absolute;left:470px;top:60px;width:{grid_w}px;height:480px;display:grid;"
+           "grid-template-columns:repeat(4,1fr);gap:18px 14px;align-content:center}"
+           ".cc{padding:7px;border-radius:" + ("4px" if clark else "10px") + ";box-shadow:3px 5px 12px #0007;color:#2a2116;min-width:0}"
+           ".cc i{display:block;aspect-ratio:16/9;background:#0005 center/cover no-repeat;border-radius:" + ("2px" if clark else "6px") + "}"
+           ".cc b{display:block;font-size:17px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}"
+           ".cc span{display:block;font-size:14px;font-weight:700;color:#5a2a3a}")
+    if clark:
+        left = (f'<div class=serif style="position:absolute;left:60px;top:90px;width:390px">'
+                f'<div style="font-size:20px;letter-spacing:3px;color:#d9b88a">FLAVR · FILED BY CLARK</div>'
+                f'<div style="font-size:58px;color:#e0782e;line-height:1.05;margin-top:14px">{_e(heading)}</div>'
+                f'<div style="font-size:28px;color:#f3e6d3;margin-top:16px">{_e(week.range_text)}</div>'
+                f'<div style="display:inline-block;margin-top:22px;background:#f4ead8;color:#2b1d12;padding:10px 16px;'
+                f'font-size:22px;border-radius:4px;box-shadow:0 6px 16px #0008">{_e(stats)}</div></div>')
+        return _doc("background:linear-gradient(135deg,#1c130d,#3a2416 70%,#4a2a14);color:#f3e6d3",
+                    f"<style>{css}</style>{left}<div class='g serif'>{cards}</div>{fig}")
+    left = (f'<div style="position:absolute;left:60px;top:80px;width:390px">'
+            f'<img src="{logo_data_url()}" style="height:90px">'
+            f'<div style="font-size:50px;font-weight:900;letter-spacing:2px;line-height:1.05;margin-top:16px">{_e(heading.upper())}</div>'
+            f'<div style="font-size:26px;color:#f8cf33;font-weight:800;margin-top:12px">{_e(week.range_text)}</div>'
+            f'<div class=note style="position:static;display:inline-block;margin-top:20px;transform:rotate(-2deg);font-size:22px">'
+            f'{_e(stats)}</div></div>')
+    return _doc("background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a);color:#fff",
+                f"<style>{css}</style>{left}<div class=g>{cards}</div>{fig}")
