@@ -210,6 +210,13 @@ def heading_of(p: Dict[str, Any], fallback: str = "In Review") -> str:
     return p.get("heading") or HEADINGS.get(p.get("label") or "", fallback)
 
 
+def _fx(p: Dict[str, Any], card: str) -> str:
+    """The card picture's own size / turn / mirror / move as CSS (article drafts only: p["figs"][card], set in the
+    article editor; a pending review has none)."""
+    from . import tall
+    return tall.picture_fx((p.get("figs") or {}).get(card) or {})
+
+
 def card_html(p: Dict[str, Any], card: str) -> str:
     """The opener or desk card for pending review (or article draft) ``p``. p["pose"] (article
     editor) picks the opener pose by hand; else it follows the facts (hosts.pose)."""
@@ -223,9 +230,9 @@ def card_html(p: Dict[str, Any], card: str) -> str:
         return host_cards.opener(key, heading_of(p), str(f.get("range") or ""),
                                  chosen(p, "opener"), notes, [chosen(p, f"note{i}") for i in range(len(notes))],
                                  pose, p.get("opener_kind") == "chibi", preview=preview,
-                                 reply=chosen(p, "reply"), reply_key=hosts.other(key))
+                                 reply=chosen(p, "reply"), reply_key=hosts.other(key), fx=_fx(p, "opener"))
     return host_cards.desk(key, chosen(p, "desk_highlight"), chosen(p, "desk_nudge"), chosen(p, "desk_signoff"),
-                           p.get("desk_kind") or "desk")
+                           p.get("desk_kind") or "desk", fx=_fx(p, "desk"))
 
 
 async def post_card(poster: Any, channel: str, p: Dict[str, Any], card: str) -> None:
