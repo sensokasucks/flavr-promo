@@ -36,6 +36,8 @@ render.day_card (/calendar/day.png). In the host's look a day picture has a layo
 alternative layouts so i can pick from them"): one for the whole article at the top, and each day
 can pick its own. Drafts: p["day_look"] "host" / "board", p["day_layout"] the article's layout,
 p["day_layouts"] {day: layout, "" = the article's}.
+p["day_kinds"] / p["day_vars"] {day: host picture kind / pool variant id, "" = the default chibi_happy / the draft's pick}:
+which host picture stands on that day's classic picture (owner 2026-11-22: "no way to pick from the host images").
 
 Every line (round 2, owner 2026-11-21: "a better way to regen the open/close cards ... kobold regen
 lines in each section so i dont have to scroll to the top and get forced to change all the lines")
@@ -401,7 +403,7 @@ def _tall_block(dkey: str, p: Dict[str, Any], tid: str) -> str:
 
 
 _STAMP_SKIP = ("saved_at", "texts", "talls", "sections", "picks", "candidates", "ai", "ai_state", "ai_raw",
-               "day_style", "day_styles", "day_talls", "day_seams", "day_stream_look")
+               "day_style", "day_styles", "day_talls", "day_seams", "day_stream_look", "day_kinds", "day_vars")
 
 
 def stamp(p: Dict[str, Any], part: str = "") -> int:
@@ -421,6 +423,8 @@ def stamp(p: Dict[str, Any], part: str = "") -> int:
             mine.append([host_picker.chosen(p, x) for x in ("reply", "desk_highlight", "desk_nudge", "desk_signoff")])
     elif part:
         mine = host_picker.chosen(p, part)
+        if part.startswith("day") and part[3:].isdigit():       # its own host picture
+            mine = [mine, (p.get("day_kinds") or {}).get(part[3:], ""), (p.get("day_vars") or {}).get(part[3:], "")]
     return zlib.crc32(json.dumps([base, mine], sort_keys=True, default=str).encode())
 
 
@@ -582,7 +586,7 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
                 mine = (p.get("day_layouts") or {}).get(sid[3:], "")
                 lay = "".join(f'<option value="{v}"{" selected" if v == mine else ""}>{_e(n)}</option>'
                               for v, n in [("", "Layout: same as the article")] + list(host_cards.DAY_LAYOUTS.items()))
-                line += (f'<label>Layout <select name="daylayout_{sid[3:]}">{lay}</select></label>'
+                line += (f'<label>Layout <select name="daylayout_{sid[3:]}">{lay}</select></label> ' + _day_picture_menus(p, sid[3:])
                         + _line_choices(p, sid, f'{hosts.HOSTS[p["host"]]["name"]}\'s line on this picture', ai_on,
                                         none="no line (no bubble)"))
             body = line + f'<div class=box>{section_html(dkey, p, s)}</div>'
@@ -715,6 +719,26 @@ def _recipe_row(week: Any, store: Any = None) -> str:
             '<small>(save your own stacks in the builder with "Save stack")</small></p>')
 
 
+def _day_picture_menus(p: Dict[str, Any], i: str) -> str:
+    """The host picture of a classic day picture: its pose / kind (chibi happy is the default) and which picture of
+    that kind's pool (main, built-in extras, uploads), with a small preview. Saved by ``_save_form`` as
+    ``daykind_<i>`` / ``dayvar_<i>`` into p["day_kinds"] / p["day_vars"]; ``day_picture`` reads them."""
+    key = p["host"]
+    have = hosts.pictures(key)
+    kind = (p.get("day_kinds") or {}).get(i, "")
+    kinds = [("", "Chibi happy (default)")] + [(k, k.replace("_", " ")) for k in hosts.POOLED if have.get(k) and k != "chibi_happy"]
+    var = (p.get("day_vars") or {}).get(i, "")
+    shown = kind or "chibi_happy"
+    vars_ = [("", "auto (the draft's pick)")] + [
+        (v, "main" if v == "main" else f"built-in {v[1:]}" if v.startswith("b") else f"#{v}") for v, _ in hosts.variants(key, shown)]
+    o = lambda opts, cur: "".join(f'<option value="{v}"{" selected" if v == cur else ""}>{_e(n)}</option>' for v, n in opts)  # noqa: E731
+    pin = (p.get("pins") or {}).get(shown, "")
+    thumb = (f'<img src="/settings/picture/{key}/{shown}?v={var or pin or "main"}" alt="" style="height:64px;vertical-align:middle">'
+             if hosts.exact(key, shown, var or pin or "main") else "")
+    return (f'<label>Host picture <select name="daykind_{i}">{o(kinds, kind)}</select></label> '
+            f'<label>Which one <select name="dayvar_{i}">{o(vars_, var)}</select></label> {thumb}')
+
+
 def _variation_picker(p: Dict[str, Any]) -> str:
     """The "Picture variations" box: for each picture kind of the host with a pool (more than one
     picture, Hosts > Pictures), small thumbnails to pin one by hand, "automatic" = the draft's seed
@@ -807,6 +831,12 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
         v = str(form.get(f"daylayout_{i}") or "")
         if f"daylayout_{i}" in form and (v in host_cards.DAY_LAYOUTS or not v):
             p.setdefault("day_layouts", {})[str(i)] = v
+        if f"daykind_{i}" in form:              # the host picture of the day (menus: _day_picture_menus)
+            k = str(form.get(f"daykind_{i}") or "")
+            k = k if k in hosts.POOLED else ""
+            p.setdefault("day_kinds", {})[str(i)] = k
+            v = str(form.get(f"dayvar_{i}") or "")
+            p.setdefault("day_vars", {})[str(i)] = v if v in [x for x, _ in hosts.variants(p["host"], k or "chibi_happy")] else ""
     if "scheme" in form:                            # the article's colour scheme (flavrpromo/schemes.py)
         v = str(form.get("scheme") or "")
         if v in ("", schemes.RANDOM, schemes.MIX) or (schemes.get(v) and v != p["host"]):
@@ -1013,9 +1043,13 @@ def add_routes(app: web.Application, poster: Any) -> None:
             raise web.HTTPServiceUnavailable(text="No Chromium for pictures.")
         week, _ = await _article(poster, p)
         await poster.images.fetch_all(week)         # the stream thumbnails, cached like the board's
-        with _looks(p):
+        kind = (p.get("day_kinds") or {}).get(str(i), "")
+        pins = dict(p.get("pins") or {})
+        if (p.get("day_vars") or {}).get(str(i)):       # the day's own pick of the pool overrides the draft's pin for its kind
+            pins[kind or "chibi_happy"] = p["day_vars"][str(i)]
+        with hosts.look(p.get("seed"), pins):
             png = await poster.shooter.png(schemes.recolour(host_cards.day(
-                p["host"], week, i, poster.images.data_url, host_picker.chosen(p, f"day{i}"),
+                p["host"], week, i, poster.images.data_url, host_picker.chosen(p, f"day{i}"), chibi_kind=kind,
                 layout=(p.get("day_layouts") or {}).get(str(i)) or p.get("day_layout", "wall")), scheme_for(p, f"day{i}")))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
 

@@ -185,6 +185,13 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             p = await act("save", on_summary="", day_layout="wall", **{f"daylayout_{day[3:]}": "spotlight"})
             await c.get(f"/settings/article/day?d={dkey}&day={day[3:]}")
             assert "TOP PICK" in poster.shooter.docs[-1]
+            # the day picture's host picture: a pose menu and a "which one" menu per day (owner 2026-11-22), saved in the draft
+            p = await act("save", on_summary="", day_look="host", **{f"daykind_{day[3:]}": "chibi_pointing", f"dayvar_{day[3:]}": "nonsense"})
+            assert p["day_kinds"][day[3:]] == "chibi_pointing" and p["day_vars"][day[3:]] == ""      # an unknown picture id is dropped
+            p = await act("save", on_summary="", **{f"daykind_{day[3:]}": "nonsense"})
+            assert p["day_kinds"][day[3:]] == ""
+            page = await (await c.get(f"/settings/article?group=flavr&which=week")).text()
+            assert f'name="daykind_{day[3:]}"' in page and f'name="dayvar_{day[3:]}"' in page
             p = await act("save", on_summary="", day_look="board")
             view = await (await c.get(f"/settings/article/view?d={dkey}")).text()
             assert "/calendar/day.png" in view.split('id="body"')[1]
