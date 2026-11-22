@@ -16,6 +16,9 @@ edits it:
     picture ...; "mix n match the content of each segment") and a ✨ that has KoboldCpp write the remark
     from that stream's / game's facts (flavrpromo/recipes.py); "✨ Write all remarks" does every empty one
     in the background,
+  * a host picture on any chunk (always there on host moment / hero / sign-off, a tick box on the others)
+    with its own size %, turn in degrees, mirror, move right / down, and "let it stick out" over the
+    neighbouring chunks (tall.figure),
   * add a chunk, insert a saved chunk, start from a built-in or saved stack, save the stack as a
     template (the layout; this week's streams, games and remarks are dropped and refilled when it's used), delete saved chunks / stacks.
 Saved chunks: kv "tall_chunks" {name: chunk}; saved stacks: kv "tall_templates" {name: [chunk]}.
@@ -75,6 +78,33 @@ def _picture_menus(c: Dict[str, Any], p: Dict[str, Any]) -> str:
             f'<label>Pose <select name="{c["id"]}__kind">{_opts(kinds, c.get("kind"))}</select></label> '
             f'<label>Which picture <select name="{c["id"]}__var">{_opts(vars_, c.get("var") or "")}</select></label>'
             f'<small>Change the host or pose, press Save, then the picture menu shows that pose\'s pool.</small>')
+
+
+def _figure_controls(c: Dict[str, Any], p: Dict[str, Any]) -> str:
+    """The host picture box every chunk but the chat has: the tick box (and side, host, pose) on chunk types
+    where the picture is optional, then size / turn / mirror / move / stick out once there is a picture."""
+    cid, t = c["id"], c["type"]
+    if t == "chat":
+        return ""
+    out = f'<input type=hidden name="{cid}__figed" value=1>'
+    if t in tall.PIC_TYPES:
+        out += (f'<label class=tick><input type=checkbox name="{cid}__pic" value=1{" checked" if c.get("pic") else ""}> '
+                f'Add a host picture</label> ')
+        if c.get("pic"):
+            out += (f'<label>Side <select name="{cid}__side">{_opts(tall.SIDES.items(), c.get("side") or "right")}</select></label>'
+                    + _picture_menus(c, p))
+    if not tall.has_figure(c):
+        return (f'<div class=fig>{out}<small>Tick it and press Save for the picture\'s menus.</small></div>'
+                if t in tall.PIC_TYPES else "")
+    num = lambda f, label, unit: (  # noqa: E731
+        f'<label>{label} <input type=number name="{cid}__{f}" value="{tall._num(c, f)}" min={tall.PIC_NUMBERS[f][0]} '
+        f'max={tall.PIC_NUMBERS[f][1]} step={5 if f != "pscale" else 10} style="width:5.5em"> {unit}</label> ')
+    return (f'<div class=fig><b>Host picture</b> {out}'
+            + num("pscale", "Size", "%") + num("prot", "Turn", "°") + num("px", "Move right", "px") + num("py", "Move down", "px")
+            + f'<label class=tick><input type=checkbox name="{cid}__pflip" value=1{" checked" if c.get("pflip") else ""}> Mirror</label> '
+            f'<label class=tick><input type=checkbox name="{cid}__ppop" value=1{" checked" if c.get("ppop") else ""}> '
+            f'Let it stick out over the next chunks</label>'
+            f'<small>100% is the built-in size; it grows from its feet. Negative numbers move it left / up.</small></div>')
 
 
 def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str]) -> str:
@@ -146,7 +176,7 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
             f'<button name=action value="down:{cid}" class=alt{" disabled" if i == len(chunks) - 1 else ""}>↓</button> '
             f'<button name=action value="dup:{cid}" class=alt>Duplicate</button> '
             f'<button name=action value="del:{cid}" class=alt>Remove</button></span></div>'
-            f'{_fields(c, p, week, lines)}'
+            f'{_fields(c, p, week, lines)}{_figure_controls(c, p)}'
             + ("" if i == len(chunks) - 1 else
                f'<p><label>Bottom edge <select name="{cid}__cut">{_opts(tall.CUTS.items(), c.get("cut") or "")}</select></label> '
                f'<label>Slope <select name="{cid}__slope">{_opts([("0", "Gentle"), ("1", "Normal"), ("2", "Steep")], c.get("slope", 1))}'
@@ -188,7 +218,7 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
              ".prev img{max-width:520px;width:100%;border-radius:8px;border:2px solid #3d2a3b;display:block;margin:10px 0}"
              ".chunk{border:1px solid #3d2a3b;border-radius:10px;padding:8px 14px;margin:10px 0}"
              ".chunk .head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}"
-             ".chunk label{display:inline-block;margin:6px 10px 6px 0}.ticks label.tick{margin:2px 14px 2px 0;font-size:15px}.chunk textarea{display:block}"
+             ".chunk label{display:inline-block;margin:6px 10px 6px 0}.ticks label.tick{margin:2px 14px 2px 0;font-size:15px}.fig{border-top:1px dashed #3d2a3b;margin-top:8px;padding-top:6px}.fig small{display:block}.chunk textarea{display:block}"
              ".chunk input:not([type]){width:min(480px,90%)}.tools p{margin:8px 0}"
              "@media(min-width:1100px){.prev{position:sticky;top:8px;float:right;margin-left:20px;width:380px}"
              "form .chunk,form .tools{margin-right:410px}}")
@@ -229,6 +259,24 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
             c["var"] = get("var") if get("var") in ids else ""
         if t == "host" and get("side") in tall.SIDES:
             c["side"] = get("side")
+    if t in tall.PIC_TYPES:                     # the optional host picture: tick box, side, host, pose, which one
+        if get("figed"):
+            c["pic"] = bool(get("pic"))
+        if get("side") in tall.SIDES:
+            c["side"] = get("side")
+        if get("host") is not None:
+            c["host"] = get("host") if get("host") in hosts.HOSTS else ""
+        if get("kind") in hosts.POOLED:
+            c["kind"] = get("kind")
+        key = c.get("host") if c.get("host") in hosts.HOSTS else p["host"]
+        if get("var") is not None:
+            c["var"] = get("var") if get("var") in [v for v, _ in hosts.variants(key, c.get("kind") or "happy")] else ""
+    if t != "chat":                             # size / turn / move / mirror / stick out of any host picture
+        for f in tall.PIC_NUMBERS:
+            if get(f) is not None:
+                c[f] = tall._num({f: get(f)}, f)
+        if get("figed"):                        # tick boxes only count when they were on the page
+            c["pflip"], c["ppop"] = bool(get("pflip")), bool(get("ppop"))
     if t == "stream" and get("ref") is not None:
         c["ref"] = get("ref") if get("ref") in {x["ref"] for x in tall.tile_choices(week)} else ""
     if t == "game" and get("game") is not None:

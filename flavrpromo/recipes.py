@@ -242,6 +242,9 @@ def build(recipe: str, p: Dict[str, Any], week: Any, arg: str = "", diagonal: bo
     if not refs:
         return [], "No streams for that choice."
     items = [{"type": "stream", "ref": r, "line": "", "host": "", "kind": "happy", "var": ""} for r, _ in refs]
+    if recipe == "person":                            # their name is the header: not again on every stream
+        for x in items:
+            x["show"] = [k for k in tall.DEFAULT_SHOW["stream"] if k != "name"]
     return _pictures(title, [sub], items, diagonal), ""
 
 
