@@ -562,6 +562,18 @@ class Store:
             self._db.execute("UPDATE segments SET ended_at=? WHERE session_id=? AND ended_at IS NULL", (at, session_id))
             self._db.commit()
 
+    def segment_set(self, seg_id: int, game: str, tag: str = "") -> None:
+        """Rename one game of a stream (the owner corrected it by hand: flavrpromo/games.py ``set_stream``)."""
+        with self._lock:
+            self._db.execute("UPDATE segments SET game=?, tag=? WHERE id=?", (game, tag, seg_id))
+            self._db.commit()
+
+    def segment_drop(self, seg_id: int) -> None:
+        """Remove one game of a stream (the owner said the stream had no game: games.set_stream)."""
+        with self._lock:
+            self._db.execute("DELETE FROM segments WHERE id=?", (seg_id,))
+            self._db.commit()
+
     def game_history(self, person_id: int, before: float, skip_session: Optional[int] = None) -> List[Dict[str, Any]]:
         """Every (stream, game) this person played that started before ``before``: one row per game
         per stream, {session_id, game, at}, oldest first. Streams from before games were tracked

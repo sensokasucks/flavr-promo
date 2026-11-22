@@ -181,7 +181,9 @@ _PICTURES_STYLE = (
 
 def _kind_row(key: str, kind: str, state: str) -> str:
     """One picture kind of one host on the Pictures tab: its main picture (replace / back to built-in)
-    and, for a pooled kind, the extra pictures (remove) and an "add" tile. ``state`` = hosts.pictures'
+    and, for a pooled kind, the extra pictures (remove) and an "add" tile. Built-in extras (ids "b<n>",
+    hosts._builtin_pool) carry a "built-in" tag; their ✕ only switches one off, and a "bring back" link
+    shows while any is off. ``state`` = hosts.pictures'
     "yours" / "built-in" / "". Everything here is a quick form (flavrpromo/panel.py): it also works as a
     plain form post, and with the script the row is swapped in place (data-swap-id pool-<host>-<kind>)."""
     hidden = f'<input type=hidden name=host value={key}><input type=hidden name=kind value={kind}>'
@@ -209,16 +211,24 @@ def _kind_row(key: str, kind: str, state: str) -> str:
         f'<form class=thumb data-quick method=post action=/settings/pool>{hidden}<input type=hidden name=vid value="{_e(v)}">'
         f'<a href="{url}?v={_e(v)}&amp;t={stamp(path)}" target=_blank title="Open the picture">'
         f'<img src="{url}?v={_e(v)}&amp;t={stamp(path)}" loading=lazy alt=""></a>'
-        f'<button name=action value=remove class=x title="Remove this picture from the pool">✕</button></form>'
+        + ('<span class=tag>built-in</span><button name=action value=remove class=x title="Stop using this '
+           'built-in picture (you can bring it back)">✕</button></form>' if v.startswith("b") else
+           '<button name=action value=remove class=x title="Remove this picture from the pool">✕</button></form>')
         for v, path in extra)
+    uploads = [v for v, _ in extra if not v.startswith("b")]      # only these count towards hosts.POOL_MAX
+    off = hosts.hidden_builtins(key, kind)
+    back = (f'<form data-quick method=post action=/settings/pool style="display:inline;margin-left:8px">{hidden}'
+            f'<button name=action value=unhide class=link title="Use the built-in pictures you removed again">'
+            f'↺ {off} built-in removed</button></form>' if off else "")
     # the group's heading already says "chibi" for the chibi poses; the two heads share a group, so they keep it
     name = (kind if kind not in hosts.POOLED else kind.replace("chibi_", "")).replace("_", " ")
     if kind not in hosts.POOLED:       # heads stay single: the go-live avatar must not change at random (hosts.py)
         count, add, zone = "single picture", "", f"main-{key}-{kind}"
     else:
         n = len(extra) + (1 if main_path is not None else 0)
-        count = (f'{n} of {hosts.POOL_MAX + 1}' + (" · a post picks one at random" if n > 1 else ""))
-        full = len(extra) >= hosts.POOL_MAX
+        count = (f'{n} of {hosts.POOL_MAX + 1 + len(extra) - len(uploads)}'
+                 + (" · a post picks one at random" if n > 1 else ""))
+        full = len(uploads) >= hosts.POOL_MAX
         add = "" if full else (
             f'<form class=thumb data-quick method=post action=/settings/pool enctype=multipart/form-data>{hidden}'
             f'<label class="tile pick" title="Add pictures to this pool (or drop them here)">＋<small>Add pictures</small>'
@@ -229,7 +239,7 @@ def _kind_row(key: str, kind: str, state: str) -> str:
             count += " · full, remove one to add another"
     return (f'<div class=kind data-swap=rebuild data-swap-id="pool-{key}-{kind}">'
             f'<div{f" data-dropzone={zone}" if zone else ""}><div class=kindhead><b>{_e(name)}</b>'
-            f'<small>{_e(count)}</small></div><div class=strip>{main}{thumbs}{add}</div></div></div>')
+            f'<small>{_e(count)}</small>{back}</div><div class=strip>{main}{thumbs}{add}</div></div></div>')
 
 
 def pictures_page(poster: Any, saved: str = "") -> str:
@@ -244,7 +254,8 @@ def pictures_page(poster: Any, saved: str = "") -> str:
         have = hosts.pictures(key)
         total = sum(len(hosts.variants(key, k)) if k in hosts.POOLED else (1 if have[k] else 0) for k in hosts.KINDS)
         own = sum(1 for k in hosts.KINDS if have[k] == "yours") + sum(
-            len([v for v, _ in hosts.variants(key, k) if v != "main"]) for k in hosts.POOLED)
+            len([v for v, _ in hosts.variants(key, k) if v != "main" and not v.startswith("b")])   # "b<n>" = built-in extra
+            for k in hosts.POOLED)
         groups = "".join(
             f'<details class="card sub" id="pics-{key}-{gid}" open><summary><b>{_e(title)}</b></summary>'
             f'<div class=inner>{"".join(_kind_row(key, k, have[k]) for k in kinds)}</div></details>'
@@ -258,7 +269,9 @@ def pictures_page(poster: Any, saved: str = "") -> str:
             f'built-in one back. <b>＋ Add pictures</b> puts more pictures in the same pool (up to {hosts.POOL_MAX} '
             f'extra): a post or article picks one at random, and the article editor can pin one or re-roll. You can '
             f'also drop picture files onto a row (adds them) or onto a main picture (replaces it). ✕ deletes an '
-            f'added picture.</p><p><button type=button class=link data-foldall=close>Fold all</button>'
+            f'added picture. The chibi kinds come with a few <b>built-in</b> extras: ✕ on one only stops using it '
+            f'(a link next to the kind\'s name brings them back), and they step aside while a kind\'s main '
+            f'picture is your own.</p><p><button type=button class=link data-foldall=close>Fold all</button>'
             f'<button type=button class=link data-foldall=open>Open all</button></p>{"".join(cards)}')
     return frame("FlaVR Promo pictures", "🖼️ Pictures", body, saved, style=_PICTURES_STYLE)
 
@@ -376,14 +389,23 @@ def add_routes(app: web.Application, poster: Any) -> None:
         return web.FileResponse(p, headers={"Cache-Control": "no-store"})
 
     async def save_pool(request: web.Request) -> web.Response:
-        """Add (several files at once) or remove extra pictures of a kind's pool (hosts.add_to_pool)."""
+        """Add (several files at once) or remove extra pictures of a kind's pool (hosts.add_to_pool), and
+        switch built-in extras off / back on (hosts.hide_builtin / unhide_builtins)."""
         form = await request.post()
         key, kind = str(form.get("host") or ""), str(form.get("kind") or "")
         if key not in hosts.HOSTS or kind not in hosts.POOLED:
             raise _back("Unknown picture.", "pictures")
         who = f"{hosts.HOSTS[key]['name']}'s {kind.replace('_', ' ')}"
+        vid = str(form.get("vid") or "")
+        if str(form.get("action")) == "unhide":       # the built-in extras switched off with ✕ come back
+            n = hosts.unhide_builtins(store, key, kind)
+            raise _back(f"{n} built-in picture{'' if n == 1 else 's'} of {who} back in use.", "pictures")
         if str(form.get("action")) == "remove":
-            gone = hosts.remove_from_pool(key, kind, str(form.get("vid") or ""))
+            if vid.startswith("b"):                   # a built-in extra: only switched off (kv hosts_art_hidden)
+                gone = hosts.hide_builtin(store, key, kind, vid)
+                raise _back(f"Stopped using a built-in picture of {who}." if gone else "That picture was already gone.",
+                            "pictures")
+            gone = hosts.remove_from_pool(key, kind, vid)
             raise _back(f"Removed a picture from {who}." if gone else "That picture was already gone.", "pictures")
         files = [f for f in form.getall("file", []) if isinstance(f, web.FileField) and f.filename]
         if not files:

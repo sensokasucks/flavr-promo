@@ -31,6 +31,8 @@ Rules (from the plan doc, decided with the owner):
   * LATE NOTICE (recap only): a stream with no scheduled item seen at least LATE_NOTICE before it
     started (never for streams filled in from VODs: nobody was looking for schedules then);
   * people marked hidden (/friend hide) are left out;
+  * a stream with no game takes the one the owner gave its title by hand (flavrpromo/games.py
+    ``remember_fix``: /friend game, the tall picture builder's game picker), planned streams too;
   * a confirmed collab (flavrpromo/collabs.py, owner 2026-11-22) carries its partners' names in
     ``Tile.collab``, and everything that draws the calendar highlights it.
 
@@ -45,7 +47,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from . import groups
+from . import games, groups
 from .store import PLATFORMS, Store
 
 MATCH_WINDOW = 3 * 3600.0       # a stream this close to a scheduled time "is" that scheduled stream
@@ -265,6 +267,15 @@ def build_week(store: Store, group: str, start: datetime, now: float, tz: ZoneIn
     collabs.mark(store, tiles)          # confirmed collabs get their partners' names (the highlight)
     if group == promo.GROUP:
         tiles += promo.tiles(store, a, b, now, recap)
+
+    # a title the owner gave a game by hand (games.remember_fix: /friend game, the tall picture builder's
+    # game picker) names the game of every stream with that title and none of its own, planned ones too
+    fixes: Dict[int, Dict[str, str]] = {}
+    for t in tiles:
+        if not t.game and t.title and t.person_id:
+            if t.person_id not in fixes:
+                fixes[t.person_id] = store.get(f"title_games.{t.person_id}") or {}
+            t.game = str(fixes[t.person_id].get(games._norm(t.title)) or "")
 
     by_day: List[List[Tile]] = [[] for _ in range(days)]
     for t in tiles:

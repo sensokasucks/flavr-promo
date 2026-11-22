@@ -85,6 +85,16 @@ ASKS = {
               "they are already printed next to your line.",
     "game": "Write one reaction to this game being played this week, in your own voice ({length}). "
             "Do not list who played it or how many streams; that is already printed next to your line.",
+    # the same two chunks with "The remark is about: the game" (owner 2026-11-22: "a good way to get the host to
+    # talk a little about the game"); the facts then carry the game's longer details (gameinfo.talk)
+    "stream_game": "Talk a little about the game in this stream, in your own voice ({length}): what kind of game "
+                   "it is and what makes it fun to watch, using only what the facts say about the game. If the facts "
+                   "do not say what the game is, go by its name and the stream title and do not make up details. "
+                   "Do not repeat the streamer's name, the day, the length or the platform; they are already printed "
+                   "next to your line.",
+    "game_talk": "Talk a little about this game in your own voice ({length}): what kind of game it is and why it is "
+                 "fun to watch someone play it, using only what the facts say about it. Do not list who played it or "
+                 "how many streams; that is already printed next to your line.",
     # banter (owner 2026-11-22: hosts answering each other). {name} = the host being answered, {line} = what
     # they said. "reply": the other host's answer on the opener card (``Kobold.replies``); "chat" opens a tall
     # picture's chat chunk and "chat_reply" is every turn after it (``Kobold.chat``).
@@ -103,6 +113,7 @@ _MID = ("one short sentence", "one or two sentences", "two to four sentences, at
 _BRIEF = ("a few words", "one short sentence", "one or two sentences")
 _CHAT = ("a few words", "one short sentence, at most 16 words", "one or two short sentences, at most 28 words")
 LENGTHS = {"opener": _LONG, "desk_highlight": _LONG, "day": _LONG, "stream": _MID, "game": _MID,
+           "stream_game": _LONG, "game_talk": _LONG,      # talking about a game needs a little more room
            "note": ("1 to 3 words", "2 to 5 words", "4 to 8 words"),
            "desk_nudge": _BRIEF, "desk_signoff": _BRIEF,
            "reply": ("a few words", "one short sentence, at most 20 words", "one or two sentences, at most 30 words"),
@@ -331,6 +342,14 @@ def fill_ask(ask: str, n: int, heading: str, length: str = "", name: str = "", l
         return ask
 
 
+def tidy(line: str) -> str:
+    """A line without the stray marks some models put in front of it (owner 2026-11-22: remarks came out
+    as "]BREAKING NEWS: ..." and ". . . The way you handled ..."): brackets, loose commas and
+    leading dots are dropped from the start; a line of nothing but punctuation is "" (not a line)."""
+    line = re.sub(r"^[\[\]\s,;:.…]+", "", " ".join(str(line or "").split()))
+    return line if re.sub(r"[\s!-/:-@\[-`{-~…]", "", line) else ""      # only punctuation left = nothing said
+
+
 def as_line(text: str) -> str:
     """One answer as ONE line: the items of its list joined ("Monday is busy!" + "Traube starts at
     midnight." = one line), cut to MAX_CHARS at a word; "" when nothing usable."""
@@ -338,27 +357,30 @@ def as_line(text: str) -> str:
     line = " ".join(items)
     if not line:                        # plain prose with no quotes: keep the words themselves
         plain = re.sub(r"(?s)<think>.*?</think>|```(?:json)?", "", text or "")
-        line = " ".join(plain.strip().strip("[]").strip().strip('"').split())
+        line = tidy(tidy(plain.strip().strip("[]").strip()).strip('"'))
     if len(line) > MAX_CHARS:
         line = line[:MAX_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "…"
     return line
 
 
 def parse(text: str, longest: int = MAX_CHARS) -> List[str]:
-    """The model's answer (continuing after "[") as clean lines; bad ones are dropped. Copes with a
+    """The model's answer (continuing after "[") as clean lines (``tidy``); bad ones are dropped. Copes with a
     list written one item per line, a ```json fence or a second "[", thinking (<think>...</think>)
     before it, and a numbered / bulleted list of quoted lines instead of JSON."""
     text = re.sub(r"(?s)<think>.*?</think>", "", text or "")
     text = re.sub(r"```(?:json)?", "", text).strip()
     text = text.lstrip("[").strip()
-    body = "[" + text.split("]", 1)[0] + "]"
-    try:
-        items = json.loads(body)
+    try:                                # the list as written; a "]" inside a line must not end it early
+        items, _ = json.JSONDecoder().raw_decode("[" + text)
     except ValueError:
-        items = re.findall(r'"((?:[^"\\]|\\.)*)"', body)
+        body = "[" + text.split("]", 1)[0] + "]"
+        try:
+            items = json.loads(body)
+        except ValueError:
+            items = re.findall(r'"((?:[^"\\]|\\.)*)"', body)
     out: List[str] = []
     for x in items if isinstance(items, list) else []:
-        s = " ".join(str(x).split())
+        s = tidy(str(x))                # no stray "]" or ". . ." in front; an item of only dots is dropped
         if not s or len(s) > longest or "@" in s or "http" in s.lower() or "{" in s or s in out:
             continue
         out.append(s)

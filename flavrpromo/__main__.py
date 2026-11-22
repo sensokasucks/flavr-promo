@@ -117,6 +117,7 @@ async def main() -> int:
         server.extra_routes.append(lambda app: collab_page.add_routes(app, poster))   # /settings/collabs
         # game genres / summary / store link from IGDB with the Twitch keys (flavrpromo/gameinfo.py)
         bot.game_info = GameInfo(store, checkers["twitch"])
+        poster.game_info = bot.game_info             # the tall picture builder's game picker (tall_page.py, recipes.py)
         watcher.guess_game = bot.game_info.guess     # YouTube titles → game (games.py detect_how "igdb")
         server.extra_routes.append(lambda app: host_picker.add_routes(app, poster))
 
