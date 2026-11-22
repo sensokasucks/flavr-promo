@@ -38,6 +38,7 @@ can pick its own. Drafts: p["day_look"] "host" / "board", p["day_layout"] the ar
 p["day_layouts"] {day: layout, "" = the article's}.
 p["day_kinds"] / p["day_vars"] {day: host picture kind / pool variant id, "" = the default chibi_happy / the draft's pick}:
 which host picture stands on that day's classic picture (owner 2026-11-22: "no way to pick from the host images").
+p["figs"] {"opener" / "desk": {pscale, prot, px, py, pflip}}: the same for the opener and desk cards' picture (host_cards fx).
 p["day_figs"] {day: {pscale, prot, px, py, pflip}}: its size % / turn / move / mirror, as the tall builder's chunks have (tall.PIC_NUMBERS).
 
 Every line (round 2, owner 2026-11-21: "a better way to regen the open/close cards ... kobold regen
@@ -404,7 +405,7 @@ def _tall_block(dkey: str, p: Dict[str, Any], tid: str) -> str:
 
 
 _STAMP_SKIP = ("saved_at", "texts", "talls", "sections", "picks", "candidates", "ai", "ai_state", "ai_raw",
-               "day_style", "day_styles", "day_talls", "day_seams", "day_stream_look", "day_kinds", "day_vars", "day_figs")
+               "day_style", "day_styles", "day_talls", "day_seams", "day_stream_look", "day_kinds", "day_vars", "day_figs", "figs")
 
 
 def stamp(p: Dict[str, Any], part: str = "") -> int:
@@ -415,7 +416,7 @@ def stamp(p: Dict[str, Any], part: str = "") -> int:
     base = {k: v for k, v in p.items() if k not in _STAMP_SKIP}
     mine: Any = None
     if part in HOST_SECTIONS:
-        mine = [host_picker.chosen(p, x) for x in _slots_of(part, p)]
+        mine = [host_picker.chosen(p, x) for x in _slots_of(part, p)] + [(p.get("figs") or {}).get((p.get("pics") or {}).get(part), {})]
     elif part in (p.get("talls") or {}):          # its chunks and its own host style (the builder's Look card)
         mine = [p["talls"][part].get("chunks"), p["talls"][part].get("host") or ""]
         if any(c.get("type") == "stats" and c.get("look") == "notes" for c in p["talls"][part].get("chunks") or []):
@@ -550,6 +551,8 @@ def _host_controls(dkey: str, p: Dict[str, Any], sid: str, ai_on: bool) -> str:
     ai = (f'<button name=action value="ai:{sid}" class=alt>✨ New lines for every slot here (in the background)</button>'
           if ai_on else "")
     colours = _scheme_menu(p, sid) if cur in ("opener", "desk") else ""     # only the cards are drawn in colours
+    if cur in ("opener", "desk"):               # the card's big picture: size / turn / move / mirror, like a chunk's
+        swap += "<p>" + _fig_boxes((p.get("figs") or {}).get(cur) or {}, lambda f: f"cardfig_{cur}_{f}") + "</p>"
     return (f'<div class=two><div>{"".join(rows)}</div><div><label>Picture <select name="pic_{sid}">{sel}</select>'
             f'</label>{swap}{colours}<p>{ai}</p></div></div>')
 
@@ -721,6 +724,25 @@ def _recipe_row(week: Any, store: Any = None) -> str:
             '<small>(save your own stacks in the builder with "Save stack")</small></p>')
 
 
+def _fig_boxes(fig: Dict[str, Any], name: Any) -> str:
+    """The host picture's size % / turn / move / mirror boxes (the tall builder's, tall.PIC_NUMBERS) for ``fig`` (its
+    saved values); ``name(field)`` gives each input's form name, ``name("on")`` a hidden marker that the boxes were on
+    the page. Read back by ``_fig_read``."""
+    num = lambda f, label, unit: (  # noqa: E731
+        f'<label>{label} <input type=number name="{name(f)}" value="{tall._num(fig, f)}" min={tall.PIC_NUMBERS[f][0]} '
+        f'max={tall.PIC_NUMBERS[f][1]} step={5 if f != "pscale" else 10} style="width:5.5em"> {unit}</label> ')
+    return (num("pscale", "Size", "%") + num("prot", "Turn", "°") + num("px", "Move right", "px") + num("py", "Move down", "px")
+            + f'<input type=hidden name="{name("on")}" value=1><label class=tick><input type=checkbox name="{name("pflip")}" value=1'
+              f'{" checked" if fig.get("pflip") else ""}> Mirror</label>')
+
+
+def _fig_read(form: Any, name: Any) -> Any:
+    """The values ``_fig_boxes`` posted, clamped like the chunks' (tall._num); None when the boxes were not on the page."""
+    if name("on") not in form:
+        return None
+    return {**{f: tall._num({f: form.get(name(f))}, f) for f in tall.PIC_NUMBERS}, "pflip": bool(form.get(name("pflip")))}
+
+
 def _day_picture_menus(p: Dict[str, Any], i: str) -> str:
     """The host picture of a classic day picture: its pose / kind (chibi happy is the default) and which picture of
     that kind's pool (main, built-in extras, uploads), with a small preview. Saved by ``_save_form`` as
@@ -738,14 +760,9 @@ def _day_picture_menus(p: Dict[str, Any], i: str) -> str:
     thumb = (f'<img src="/settings/picture/{key}/{shown}?v={var or pin or "main"}" alt="" style="height:64px;vertical-align:middle">'
              if hosts.exact(key, shown, var or pin or "main") else "")
     fig = (p.get("day_figs") or {}).get(i) or {}
-    num = lambda f, label, unit: (  # noqa: E731
-        f'<label>{label} <input type=number name="dayfig_{f}_{i}" value="{tall._num(fig, f)}" min={tall.PIC_NUMBERS[f][0]} '
-        f'max={tall.PIC_NUMBERS[f][1]} step={5 if f != "pscale" else 10} style="width:5.5em"> {unit}</label> ')
     return (f'<label>Host picture <select name="daykind_{i}">{o(kinds, kind)}</select></label> '
             f'<label>Which one <select name="dayvar_{i}">{o(vars_, var)}</select></label> {thumb}<br>'
-            + num("pscale", "Size", "%") + num("prot", "Turn", "°") + num("px", "Move right", "px") + num("py", "Move down", "px")
-            + f'<input type=hidden name="dayfig_on_{i}" value=1><label class=tick><input type=checkbox name="dayfig_pflip_{i}" value=1'
-              f'{" checked" if fig.get("pflip") else ""}> Mirror</label>')
+            + _fig_boxes(fig, lambda f: f"dayfig_{f}_{i}"))
 
 
 def _variation_picker(p: Dict[str, Any]) -> str:
@@ -804,6 +821,10 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
         else:
             picks.pop(slot, None)
     p["picks"] = picks
+    for card in ("opener", "desk"):                 # the cards' picture boxes (``_host_controls``)
+        fig = _fig_read(form, lambda f, card=card: f"cardfig_{card}_{f}")
+        if fig is not None:
+            p.setdefault("figs", {})[card] = fig
     for kind in hosts.POOLED:                       # the pool pictures pinned by hand (variation picker)
         if f"pin_{kind}" in form:
             v = str(form.get(f"pin_{kind}") or "")
@@ -846,10 +867,9 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
             p.setdefault("day_kinds", {})[str(i)] = k
             v = str(form.get(f"dayvar_{i}") or "")
             p.setdefault("day_vars", {})[str(i)] = v if v in [x for x, _ in hosts.variants(p["host"], k or "chibi_happy")] else ""
-        if f"dayfig_on_{i}" in form:            # size / turn / move / mirror of that picture (same limits as the chunks')
-            p.setdefault("day_figs", {})[str(i)] = {
-                **{f: tall._num({f: form.get(f"dayfig_{f}_{i}")}, f) for f in tall.PIC_NUMBERS},
-                "pflip": bool(form.get(f"dayfig_pflip_{i}"))}
+        fig = _fig_read(form, lambda f, i=i: f"dayfig_{f}_{i}")        # size / turn / move / mirror of that picture
+        if fig is not None:
+            p.setdefault("day_figs", {})[str(i)] = fig
     if "scheme" in form:                            # the article's colour scheme (flavrpromo/schemes.py)
         v = str(form.get("scheme") or "")
         if v in ("", schemes.RANDOM, schemes.MIX) or (schemes.get(v) and v != p["host"]):

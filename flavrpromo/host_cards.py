@@ -86,14 +86,16 @@ def _reply(key: str, text: str, style: str) -> str:
 
 def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[str, str]],
            comments: List[str], pose: str, chibi_main: bool = False, preview: bool = False,
-           reply: str = "", reply_key: str = "") -> str:
+           reply: str = "", reply_key: str = "", fx: str = "") -> str:
     """The opener card. ``notes``: hosts.notes() rows; ``comments``: the picked comment for each.
     ``reply`` / ``reply_key``: banter, the other host's short answer and who that is (``_reply``; it
     takes the place of the "board follows" footer's spot, which moves down a little).
     ``preview``: the Sunday preview's opener (hosts.preview_notes rows; the board follows, no desk
     card after it, so the footer and Clark's report header say so).
     ``chibi_main``: the big figure is the chibi and the regular pose peeks (picker page "opener
-    picture"; Sen 2026-11-21: chibis mixed in with the regular pictures)."""
+    picture"; Sen 2026-11-21: chibis mixed in with the regular pictures).
+    ``fx``: CSS (transform and origin) for the big figure's size / turn / mirror / move (tall.picture_fx; the article
+    editor's "Host picture" boxes, p["figs"]); "" = as designed."""
     big, small = (f"chibi_{pose}", pose) if chibi_main else (pose, f"chibi_{pose}")
     pic = hosts.data_url(key, big) or hosts.data_url(key, small)
     # the other style in the same mood peeks over the top-right edge of the bubble / report: drawn
@@ -109,7 +111,7 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
     # centred and on the floor of it: a wide picture (arms out) gets the whole width, a tall one the height
     rows = list(zip(notes, comments + [""] * len(notes)))
     if key == "clark":
-        img = f'<img src="{pic}" style="position:absolute;left:14px;top:170px;height:690px;width:450px;object-fit:contain;object-position:bottom">' if pic else ""
+        img = f'<img src="{pic}" style="position:absolute;left:14px;top:170px;height:690px;width:450px;object-fit:contain;object-position:bottom;{fx}">' if pic else ""
         table = "".join(
             f'<tr style="border-bottom:1px solid #d8c3a3"><td style="padding:9px 0;color:#8a5a33">{_e(n["label"].title())}</td>'
             f'<td style="text-align:right"><b>{_e(n["value"])}</b>{(" · <i>" + _e(c) + "</i>") if c else ""}</td></tr>'
@@ -130,7 +132,7 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
                  f'{"The week\'s board follows. — C." if preview else "The full board follows. — C."}</div></div>')
         return _doc("background:linear-gradient(135deg,#1c130d,#3a2416 70%,#4a2a14);color:#f3e6d3", inner)
     # Colette
-    img = f'<img src="{pic}" style="position:absolute;left:14px;top:160px;height:700px;width:450px;object-fit:contain;object-position:bottom">' if pic else ""
+    img = f'<img src="{pic}" style="position:absolute;left:14px;top:160px;height:700px;width:450px;object-fit:contain;object-position:bottom;{fx}">' if pic else ""
     step = (width - 20) // 3
     stickies = "".join(
         f'<div class=note style="left:{left + 10 + i * step}px;top:{480 + (i % 2) * 30}px;transform:rotate({NOTE_TILT[i]});'
@@ -150,14 +152,14 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
     return _doc("background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a);color:#fff", inner)
 
 
-def desk(key: str, highlight: str, nudge: str, signoff: str, kind: str = "desk") -> str:
-    """The closing desk card."""
+def desk(key: str, highlight: str, nudge: str, signoff: str, kind: str = "desk", fx: str = "") -> str:
+    """The closing desk card. ``fx``: CSS for the desk picture's size / turn / mirror / move, as in ``opener``."""
     # ``kind``: "desk" or "chibi_desk" (picked on the picker page, flavrpromo/host_picker.py). The picture
     # fills its panel and is kept at the top (object-position), so a taller one loses desk, not hair.
     pic = hosts.data_url(key, kind) or hosts.data_url(key, "desk")
     if key == "clark":
         left = 700 if pic else 60
-        img = f'<img src="{pic}" style="position:absolute;left:0;top:0;width:700px;height:900px;object-fit:cover;object-position:top">' if pic else ""
+        img = f'<img src="{pic}" style="position:absolute;left:0;top:0;width:700px;height:900px;object-fit:cover;object-position:top;{fx}">' if pic else ""
         text = "<br><br>".join(_e(x) for x in (highlight, nudge) if x)
         inner = (f'{img}<div style="position:absolute;left:{left}px;top:0;right:0;height:900px;background:linear-gradient(135deg,#2a1c12,#3b2416)"></div>'
                  f'<div class=serif style="position:absolute;left:{left + 70}px;top:60px;font-size:30px;color:#e0782e">Closing notes</div>'
@@ -167,7 +169,7 @@ def desk(key: str, highlight: str, nudge: str, signoff: str, kind: str = "desk")
                  f'{_e(signoff)}</div>')
         return _doc("background:#1c130d", inner)
     left = 960 if pic else 60
-    img = (f'<img src="{pic}" style="position:absolute;left:0;top:0;width:960px;height:900px;object-fit:cover;object-position:top">'
+    img = (f'<img src="{pic}" style="position:absolute;left:0;top:0;width:960px;height:900px;object-fit:cover;object-position:top;{fx}">'
            f'<div style="position:absolute;left:900px;top:0;width:700px;height:900px;'
            f'background:linear-gradient(90deg,#1b101800,#2a1026 12%)"></div>') if pic else ""
     inner = (f'{img}<div style="position:absolute;left:{left + 30}px;top:50px;font-size:26px;color:#f8cf33;font-weight:800;'

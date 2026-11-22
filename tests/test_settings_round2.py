@@ -124,6 +124,17 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             r = await c.get(f"/settings/article/picture?d={dkey}&sec=intro")
             assert r.status == 200 and await r.read() == b"\x89PNG fake"
             assert p["opener_kind"] == "chibi"
+            # the card picture's size / turn / move / mirror boxes (same as a chunk's); drawn as a transform on the figure
+            page = await (await c.get("/settings/article?group=flavr&which=week")).text()
+            assert 'name="cardfig_opener_pscale"' in page and 'name="cardfig_opener_pflip"' in page
+            p = await act("save", on_summary="", **{"cardfig_opener_on": "1", "cardfig_opener_pscale": "120", "cardfig_opener_prot": "-10",
+                                                    "cardfig_opener_px": "5", "cardfig_opener_py": "9999"})
+            assert p["figs"]["opener"] == {"pscale": 120, "prot": -10, "px": 5, "py": 1200, "pflip": False}
+            await c.get(f"/settings/article/picture?d={dkey}&sec=intro")
+            assert "translate(5px,1200px) rotate(-10deg) scale(1.20)" in poster.shooter.docs[-1]
+            p = await act("save", on_summary="", **{"cardfig_opener_on": "1"})
+            await c.get(f"/settings/article/picture?d={dkey}&sec=intro")
+            assert "transform-origin:50% 100%" not in poster.shooter.docs[-1]
             # a plain picture instead of a card for the outro
             p = await act("save", on_summary="", pic_outro="pic:sleepy")
             r = await c.get(f"/settings/article/picture?d={dkey}&sec=outro")
