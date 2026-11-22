@@ -287,3 +287,37 @@ async def test_builder_saves_the_picture_controls(tmp_path):
             assert "scale(0.60)" in poster.shooter.docs[-1] and "scale(1.50)" in poster.shooter.docs[-1]
     finally:
         hosts.init(None)
+
+
+def test_a_host_picture_stands_on_the_seam_where_it_is_not_on_the_straight_line(tmp_path):
+    """Owner 2026-11-22: the chibi beside a stream stopped short of the chunk's border. It stood on the line h - d
+    (where the text area ends) while a diagonal seam goes down to h on the right, so a picture there floated above it."""
+    hosts.init(tmp_path / "pics")
+    from types import SimpleNamespace
+    try:
+        week = SimpleNamespace(days=[[]], day_name=lambda i: "SUN", tz=None)
+        ctx = {"host": "colette", "week": week, "img": lambda u: "", "notes": [], "facts": {}, "heading": "H", "range": "R",
+               "seed": 1, "pins": {}}
+        # how far above the chunk's bottom line the seam is, at the left, middle and right (depth 60 px)
+        d, diag = 60, {"cut": "down", "slope": 2}
+        assert [round(tall.seam_up(diag, d, x)) for x in (0, tall.WIDTH / 2, tall.WIDTH)] == [60, 30, 0]
+        assert [round(tall.seam_up(dict(diag, cut="up"), d, x)) for x in (0, tall.WIDTH)] == [0, 60]
+        assert tall.seam_up({"cut": ""}, 0, 800) == 0 and tall.seam_up({"cut": "wave"}, 0, 800) == 0
+        assert 0 <= tall.seam_up({"cut": "wave", "slope": 2}, d, 1500) <= d
+        # a sign-off strip on the right with a diagonal below it: its feet are on the seam at its centre
+        foot = tall.new_chunk("footer", [], size=0, cut="down", slope=2, pic=True)
+        tail = tall.new_chunk("quote", [foot], size=0)
+        h, d = tall.height(foot), tall.cut_depth([foot, tail], 0)         # the depth the picture really gets (<= 40% of h)
+        fig = tall.figure(foot, dict(ctx, theme={}), h - d)
+        feet = h - round(tall.seam_up(foot, d, fig["x"] + fig["w"] / 2))
+        assert feet > h - d                                           # lower than the old line, on the right side
+        doc = tall.document([foot, tail], ctx)
+        assert f"top:{feet - fig['h']}px" in doc and f"top:{h - d - fig['h']}px" not in doc
+        # the picture is cut by the row's slanted clip-path, not by the text area (which stops at h - d)
+        row = doc[:doc.index("</div></div>", doc.index("<img"))]
+        assert row.count("clip-path:polygon(") == 1 and row.index("clip-path") < row.index("<img")
+        # a straight bottom edge is unchanged: standing on the chunk's bottom
+        flat = tall.document([dict(foot, cut=""), tail], ctx)
+        assert f"top:{h - tall.figure(dict(foot, cut=''), dict(ctx, theme={}), h)['h']}px" in flat
+    finally:
+        hosts.init(None)

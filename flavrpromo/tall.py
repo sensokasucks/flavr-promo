@@ -295,7 +295,9 @@ def figure(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> Dict[str, Any]:
     """Where the chunk's host picture goes in a box ``h`` px tall: {src, x, w, h (the picture's own box, standing
     on the chunk's bottom edge), room, css (its transform), pop}; {} when the chunk has none or the picture is missing.
     The box is the size the chunk was designed with; ``pscale`` etc. are applied on top as a CSS transform
-    around the picture's feet, so the text next to it stays where it is."""
+    around the picture's feet, so the text next to it stays where it is. ``h`` is the part the text uses
+    (chunk height minus the seam depth); ``document`` moves the feet down to the seam where the picture stands
+    (``seam_up``)."""
     if not has_figure(c):
         return {}
     src = _pic(ctx, _host_of(c, ctx), c.get("kind") or "happy", c.get("var") or "")
@@ -380,6 +382,25 @@ def edge(kind: str, d: int, n: int = 0) -> List[Tuple[float, float]]:
               else d * (1 - math.sin(math.pi * x)) if kind == "arc" else d * math.sin(math.pi * x))
         out.append((100 * x, round(up, 1)))
     return out
+
+
+def seam_up(c: Dict[str, Any], d: int, x: float) -> float:
+    """How many px above the chunk's bottom line its slanted / shaped bottom edge is at ``x`` px from the left
+    (0 for a straight edge or ``d`` = 0). ``document`` stands a chunk's host picture on the edge at the
+    picture's centre, so a picture on the low side of a diagonal reaches the seam instead of stopping short of it."""
+    if not d:
+        return 0.0
+    kind = c.get("cut")
+    pts = edge(kind, d, teeth(c)) if kind in SHAPED else \
+        {"down": [(0, d), (100, 0)], "up": [(0, 0), (100, d)],
+         "v": [(0, d), (V_AT, 0), (100, d)], "peak": [(0, 0), (V_AT, d), (100, 0)]}.get(kind)
+    if not pts:
+        return 0.0
+    at = 100 * max(0.0, min(float(WIDTH), x)) / WIDTH
+    for (x0, u0), (x1, u1) in zip(pts, pts[1:]):         # the points run left to right: interpolate between two
+        if x0 <= at <= x1:
+            return u0 + (u1 - u0) * ((at - x0) / (x1 - x0) if x1 > x0 else 0)
+    return float(pts[-1][1])
 
 
 def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
@@ -573,20 +594,25 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
                     "peak": f"0 0,100% 0,100% 100%,{V_AT}% calc(100% - {d}px),0 100%"}[kind]
             clip = f"clip-path:polygon({poly});"
             seams.append((y + h, d, kind, pts))
-        # the host picture: standing on the chunk's bottom edge, turned / scaled around its feet. Inside the
-        # chunk it is cut off at the chunk's edges; with ``ppop`` it goes in a layer over the whole picture.
+        # the host picture: standing on the chunk's bottom edge, turned / scaled around its feet. It is sized for
+        # the part the text uses (h - d) but stands on the seam where its centre is (``seam_up``): on the low
+        # side of a diagonal the chunk goes down to the seam, and a picture standing on h - d would stop short
+        # of it (owner 2026-11-22, the chibi beside Cara's stream). Inside the chunk it is cut off at the chunk's
+        # top and along its seam (the row's clip-path); with ``ppop`` it goes in a layer over the whole picture.
         fig, inside = figure(c, ctx, h - d), ""
         if fig:
+            feet = h - round(seam_up(c, d, fig["x"] + fig["w"] / 2 + _num(c, "px")))      # y of its feet inside the chunk
             img = (f'<img src="{fig["src"]}" style="position:absolute;left:{fig["x"]}px;top:@TOP@px;width:{fig["w"]}px;'
                    f'height:{fig["h"]}px;object-fit:contain;object-position:bottom;transform-origin:50% 100%;'
                    f'transform:{fig["css"]}">')
             if fig["pop"]:
-                pops += img.replace("@TOP@", str(y + h - d - fig["h"]), 1)
+                pops += img.replace("@TOP@", str(y + feet - fig["h"]), 1)
             else:
-                inside = img.replace("@TOP@", str(h - d - fig["h"]), 1)
+                inside = (f'<div style="position:absolute;left:0;top:{above}px;width:{WIDTH}px;height:{h}px;overflow:hidden">'
+                          + img.replace("@TOP@", str(feet - fig["h"]), 1) + "</div>")
         rows.append(f'<div style="position:absolute;left:0;top:{y - above}px;width:{WIDTH}px;height:{h + above}px;'
                     f'z-index:{n - i};{bg}{clip}"><div style="position:absolute;left:0;top:{above}px;width:{WIDTH}px;'
-                    f'height:{h - d}px;overflow:hidden">{_draw(c, ctx, h - d)}{inside}</div></div>')
+                    f'height:{h - d}px;overflow:hidden">{_draw(c, ctx, h - d)}</div>{inside}</div>')
         y += h
     stripes = ""
     for bottom, d, kind, shaped in seams:
@@ -606,5 +632,5 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
             f'<div style="position:absolute;left:0;top:0;z-index:100">{pops}</div></body></html>')
 
 
-__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SHAPED", "TEETH", "teeth", "edge", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
+__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SHAPED", "TEETH", "teeth", "edge", "SLOPES", "cut_depth", "seam_up", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
            "tile_choices"]
