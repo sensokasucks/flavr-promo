@@ -53,9 +53,43 @@ def _doc(body_style: str, inner: str) -> str:
     return f"<!doctype html><html><head><meta charset=utf-8><style>{BASE}</style></head><body style=\"{body_style}\">{inner}</body></html>"
 
 
+def _fit(text: str, size: int) -> int:
+    """The font size (px) for a host line in a box drawn for ``size`` px: a long line (the settings
+    page's Chattiness "chatty", or the owner's own text up to kobold.MAX_CHARS) is set smaller so it
+    still ends above what is drawn under it."""
+    n = len(text or "")
+    return size if n <= 260 else int(size * 0.88) if n <= 360 else int(size * 0.78)
+
+
+def _reply(key: str, text: str, style: str) -> str:
+    """Banter (owner 2026-11-22): host ``key``'s short answer, drawn on the OTHER host's opener card in
+    ``key``'s own look: a taped sticky note for Colette, a cream memo slip for Clark, each with their
+    head. ``style``: where it sits (absolute position and width). "" when there is no reply."""
+    if not text or key not in hosts.HOSTS:
+        return ""
+    head = hosts.data_url(key, "head") or hosts.data_url(key, "chibi_head")
+    face = (f'<img src="{head}" style="width:84px;height:84px;border-radius:50%;object-fit:cover;flex:none;'
+            f'border:4px solid #fff;box-shadow:0 3px 8px #0006">') if head else ""
+    name = hosts.HOSTS[key]["name"].split()[0]
+    words = _e(text if len(text) <= 190 else text[:190].rsplit(" ", 1)[0] + "…")
+    if key == "clark":
+        return (f'<div class=serif style="position:absolute;{style};display:flex;gap:16px;align-items:center;background:#f4ead8;'
+                f'color:#2b1d12;border-left:8px solid #e0782e;padding:12px 20px;font-size:22px;line-height:1.3;'
+                f'box-shadow:4px 6px 14px #0007;transform:rotate(-1deg)">{face}<div><div style="font-size:15px;'
+                f'letter-spacing:2px;color:#8a5a33">MEMO FROM {_e(name.upper())}</div>{words}</div></div>')
+    return (f'<div style="position:absolute;{style};display:flex;gap:16px;align-items:center;background:#ff9ad5;color:#2a1026;'
+            f'font-family:\'DejaVu Sans\',sans-serif;'       # her own type, also on Clark's serif report
+            f'padding:12px 20px;font-size:22px;line-height:1.3;font-weight:700;box-shadow:4px 6px 14px #0007;'
+            f'transform:rotate(1.2deg)">{face}<div><div style="font-size:15px;letter-spacing:2px;color:#7a1050">'
+            f'{_e(name.upper())} SAYS</div>{words}</div></div>')
+
+
 def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[str, str]],
-           comments: List[str], pose: str, chibi_main: bool = False, preview: bool = False) -> str:
+           comments: List[str], pose: str, chibi_main: bool = False, preview: bool = False,
+           reply: str = "", reply_key: str = "") -> str:
     """The opener card. ``notes``: hosts.notes() rows; ``comments``: the picked comment for each.
+    ``reply`` / ``reply_key``: banter, the other host's short answer and who that is (``_reply``; it
+    takes the place of the "board follows" footer's spot, which moves down a little).
     ``preview``: the Sunday preview's opener (hosts.preview_notes rows; the board follows, no desk
     card after it, so the footer and Clark's report header say so).
     ``chibi_main``: the big figure is the chibi and the regular pose peeks (picker page "opener
@@ -86,8 +120,10 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
                  f'<div style="display:flex;justify-content:space-between;font-size:20px;letter-spacing:2px;color:#8a5a33;'
                  f'border-bottom:2px solid #c9a77c;padding-bottom:10px"><span>{"SCHEDULE" if preview else "REPORT"} · {_e(range_text.upper())}</span>'
                  f'<span>STATUS: {"ON FILE" if preview else "IN ORDER"} 🍎</span></div>'
-                 f'<div style="font-size:30px;line-height:1.45;margin-top:22px">{_e(line)}</div>'
+                 f'<div style="font-size:{_fit(line, 30)}px;line-height:1.45;margin-top:22px">{_e(line)}</div>'
                  f'<table style="margin-top:26px;font-size:24px;border-collapse:collapse;width:100%">{table}</table>'
+                 # the other host's answer: stuck on the bottom of the report, left of the "board follows" line
+                 f'{_reply(reply_key, reply, "left:36px;bottom:22px;width:" + str(width - 400) + "px")}'
                  f'<div style="position:absolute;right:40px;bottom:30px;font-size:21px;color:#8a5a33;font-style:italic">'
                  f'{"The week\'s board follows. — C." if preview else "The full board follows. — C."}</div></div>')
         return _doc("background:linear-gradient(135deg,#1c130d,#3a2416 70%,#4a2a14);color:#f3e6d3", inner)
@@ -103,8 +139,11 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
              f'<div style="position:absolute;left:270px;top:36px;font-size:50px;font-weight:900;letter-spacing:3px">{_e(heading.upper())}</div>'
              f'<div style="position:absolute;left:272px;top:98px;font-size:22px;color:#f8cf33;font-weight:700">'
              f'with Colette Cappuccino · Marketing · {_e(range_text)}</div>{img}{peek}'
-             f'<div class=bub style="left:{left}px;top:170px;width:{width}px;border:5px solid #f72ca2">{_e(line)}</div>'
-             f'{stickies}<div style="position:absolute;left:{left + 20}px;top:790px;font-size:24px;color:#ddd">'
+             f'<div class=bub style="left:{left}px;top:170px;width:{width}px;border:5px solid #f72ca2;'
+             f'font-size:{_fit(line, 30)}px">{_e(line)}</div>'
+             # the other host's answer sits under the sticky notes; the "next picture" line moves below it
+             f'{stickies}{_reply(reply_key, reply, f"left:{left + 20}px;top:706px;width:{width - 60}px")}'
+             f'<div style="position:absolute;left:{left + 20}px;top:{828 if reply else 790}px;font-size:{22 if reply else 24}px;color:#ddd">'
              f'{"This week\'s board in the next picture ↓ &nbsp; See you there!!" if preview else "Full board in the next picture ↓ &nbsp; My notes at the end!"}</div>')
     return _doc("background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a);color:#fff", inner)
 

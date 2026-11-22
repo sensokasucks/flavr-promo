@@ -71,7 +71,8 @@ async def test_sunday_board_waits_for_the_host_then_opener_first(tmp_path):
     assert (f["planned"], f["people"], f["busy_day"], f["first_name"], f["first_day"], f["first_time"]) == \
         (3, 2, "Friday", "Lulu", "Monday", "8 PM")
     assert [n["label"] for n in pend["notes"]] == ["FIRST UP", "BUSIEST DAY", "MOST PLANNED"]
-    assert set(pend["candidates"]) == {"opener", "note0", "note1", "note2"}    # no desk card
+    # no desk card; "reply" = banter, the other host's answer on the opener card (hosts._add_reply)
+    assert set(pend["candidates"]) == {"opener", "note0", "note1", "note2", "reply"}
     assert all("{" not in x for c in pend["candidates"].values() for x in c)
 
     app = web.Application()
@@ -81,9 +82,11 @@ async def test_sunday_board_waits_for_the_host_then_opener_first(tmp_path):
         assert "FlaVR week ahead" in page and "desk picture" not in page and "card=desk" not in page
         r = await client.post("/hosts/pick", data={"key": key, "action": "swap"}, allow_redirects=False)
         assert r.status == 303 and store.get(key)["host"] == "clark"
-        assert set(store.get(key)["candidates"]) == {"opener", "note0", "note1", "note2"}
+        assert set(store.get(key)["candidates"]) == {"opener", "note0", "note1", "note2", "reply"}
         r = await client.post("/hosts/pick", data={"key": key, "action": "post", "opener": "__custom",
-                                                   "opener__text": "A fine week ahead."}, allow_redirects=False)
+                                                   "opener__text": "A fine week ahead.",
+                                                   "reply": host_picker.NO_REPLY},      # banter: none this time
+                              allow_redirects=False)
         assert "opener,%20then%20the%20board" in r.headers["Location"]
     before = len(d.sent)
     await p.tick()
@@ -118,7 +121,7 @@ def test_preview_lines_card_and_kobold_facts():
     f = hosts.preview_facts(empty)
     assert f["planned"] == 0 and hosts.preview_mood(f) == "empty" and hosts.preview_notes(f) == []
     c = hosts.preview_candidates("clark", f)
-    assert c["opener"] and set(c) == {"opener"}
+    assert c["opener"] and set(c) == {"opener", "reply"}
     assert "0 streams planned" in kobold.facts_text(f)
     full = {"preview": True, "planned": 7, "planned_text": "7 streams", "people": 3, "busy_day": "Friday",
             "busy_count": 3, "first_name": "Lulu", "first_day": "Monday", "first_time": "8 PM"}

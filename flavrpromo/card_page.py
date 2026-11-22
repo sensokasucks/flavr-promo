@@ -12,7 +12,12 @@ edits both:
           differ from the built-in card (flavrpromo/host_art/<host>/card.json, which stays as it is,
           so it still loads in SillyTavern). "Back to built-in" drops that host's edits.
   Asks    what each slot asks for (kobold.ASKS), kv "kobold_asks". {n} = lines per slot, {heading}
-          = "week in review", {note} = the highlight a note comments on.
+          = "week in review", {note} = the highlight a note comments on, {length} = the sentence
+          count for the settings page's Chattiness, {name} / {line} = who a banter line answers
+          and what they said.
+  Angles  the takes one of which is added to each request so the lines differ (owner 2026-11-22):
+          a box per host for their own habits and one for both, one angle per row, kv
+          "kobold_angles" ({"all": [...], "<host>": [...]}); an empty box = the built-in list.
   Preview the whole prompt one opener request sends, with example facts, and with KoboldCpp set
           up a "Try it" button that asks for opener lines with those facts and shows them.
 
@@ -51,8 +56,15 @@ def page(poster: Any, saved: str = "") -> str:
             mark = " <i>edited</i>" if (edits.get(key) or {}).get(field) else ""
             rows.append(f'<label><b>{_e(field.replace("_", " "))}</b>{mark}<small>{_e(help_text)}</small>'
                         f'<textarea name="{field}" rows={10 if field == "mes_example" else 4}>{_e(c.get(field))}</textarea></label>')
+        # with one angle and one "already used" line, so the owner sees where those go
         preview = kobold.prompt(key, kobold.fill_ask(kobold.asks()["opener"], 1, "week in review"),
-                                kobold.facts_text(SAMPLE))
+                                kobold.facts_text(SAMPLE), (kobold.angles(key) or [""])[0],
+                                hosts.templates(key, "open_normal")[:1])
+        own = (poster.store.get("kobold_angles") or {}).get(key)
+        rows.append(f'<label><b>angles (their own habits)</b>{" <i>edited</i>" if own else ""}<small>One per row. One '
+                    f'is added to each request ("For this one: ...") so the lines differ; short lines (nudge, '
+                    f'sign-off, reply) only use these. Empty = the built-in list.</small>'
+                    f'<textarea name=angles rows=6>{_e(chr(10).join(kobold.angles(key, "reply")))}</textarea></label>')
         try_it = ('<button name=action value=try class=alt>Save and try it (opener lines)</button>'
                   if getattr(poster, "kobold", None) is not None else
                   '<small>Set a KoboldCpp address on <a href="/settings#kobold">Settings</a> to try it here.</small>')
@@ -63,18 +75,44 @@ def page(poster: Any, saved: str = "") -> str:
                      f'<details><summary>The whole prompt for one opener request (example facts)</summary>'
                      f'<pre>{_e(preview)}</pre></details></section>')
     a = kobold.asks()
+    shared_angles = (poster.store.get("kobold_angles") or {}).get("all") or kobold.ANGLES
     ask_rows = "".join(
         f'<label><b>{_e(slot.replace("_", " "))}</b>{" <i>edited</i>" if (poster.store.get("kobold_asks") or {}).get(slot) else ""}'
         f'<input name="{slot}" value="{_e(a[slot])}" style="width:100%"></label>' for slot in kobold.ASKS)
     asks_form = (f'<section id=asks><h2>❓ What each slot asks for</h2><p class=help>Sent after the facts. '
                  f'{{n}} = lines per slot, {{heading}} = "week in review" / "weekend in review", {{note}} = the '
-                 f'highlight a note comments on. An empty box uses the built-in ask.</p>'
-                 f'<form method=post action=/settings/asks>{ask_rows}<p><button name=action value=save>Save asks</button> '
+                 f'highlight a note comments on, {{length}} = how long (the Chattiness on Settings), {{name}} and {{line}} = '
+                 f'who a reply answers and what they said. An empty box uses the built-in ask.</p>'
+                 f'<form method=post action=/settings/asks>{ask_rows}'
+                 f'<label><b>angles for both hosts</b>{" <i>edited</i>" if (poster.store.get("kobold_angles") or {}).get("all") else ""}'
+                 f'<small>One per row; each request for a longer line gets one of these or one of the host\'s own. '
+                 f'Empty = the built-in list. Switch angles off on Settings.</small>'
+                 f'<textarea name=angles rows=8>{_e(chr(10).join(shared_angles))}</textarea></label>'
+                 f'<p><button name=action value=save>Save asks</button> '
                  f'<button name=action value=reset class=alt>Back to built-in</button></p></form></section>')
     intro = ('<p class=help>What KoboldCpp is sent for every host line: the character card below, then the '
              'facts and the slot\'s ask. {{char}} is the host\'s name and {{user}} is "Producer". The built-in '
              'cards (flavrpromo/host_art/&lt;host&gt;/card.json) stay as they are; edits are kept here.</p>')
     return frame("Character cards", "🧾 Character cards", intro + "".join(forms) + asks_form, saved)
+
+
+ANGLES_MAX, ANGLE_CHARS = 30, 160       # angles kept per list, characters kept per angle
+
+
+def _save_angles(store: Any, who: str, raw: Any, built: list) -> None:
+    """Keep one angle list (``who``: a host key, or "all" for the shared one) in kv "kobold_angles":
+    one angle per row of ``raw``; an empty box, or the built-in list unchanged, drops the edit.
+    ``raw`` None = the form had no angles box (an older page): nothing changes."""
+    if raw is None:
+        return
+    rows = [" ".join(x.split())[:ANGLE_CHARS] for x in str(raw).splitlines()]
+    rows = [x for x in rows if x][:ANGLES_MAX]
+    edits = dict(store.get("kobold_angles") or {})
+    if rows and rows != list(built):
+        edits[who] = rows
+    else:
+        edits.pop(who, None)
+    store.put("kobold_angles", edits)
 
 
 def add_routes(app: web.Application, poster: Any) -> None:
@@ -93,6 +131,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         if str(form.get("action")) == "reset":
             all_edits.pop(key, None)
             store.put("host_cards", all_edits)
+            _save_angles(store, key, "", [])            # their own angles go back to the built-in ones too
             kobold.load_card_overrides(store)
             raise _back(f"{name}'s card is back to the built-in one.", key)
         built = kobold.builtin_card(key)
@@ -103,10 +142,12 @@ def add_routes(app: web.Application, poster: Any) -> None:
                 mine[field] = text              # only the fields that differ from the built-in card
         all_edits[key] = mine
         store.put("host_cards", all_edits)
+        _save_angles(store, key, form.get("angles"), kobold.HOST_ANGLES.get(key, []))
         kobold.load_card_overrides(store)
         note = f"Saved {name}'s card ({len(mine)} field{'' if len(mine) == 1 else 's'} edited)."
         if str(form.get("action")) == "try" and getattr(poster, "kobold", None) is not None:
             # three lines, one request each (kobold.Kobold.lines; a request = one complete line)
+            # (no ``kind``: the try-out lines are about example facts and stay out of the hosts' memory)
             lines = await poster.kobold.lines(key, kobold.asks()["opener"], "week in review", kobold.facts_text(SAMPLE), n=3)
             raw = poster.kobold.last_raw
             note += ("\n✨ " + "\n✨ ".join(lines)) if lines else \
@@ -117,14 +158,16 @@ def add_routes(app: web.Application, poster: Any) -> None:
         form = await request.post()
         if str(form.get("action")) == "reset":
             store.put("kobold_asks", {})
+            _save_angles(store, "all", "", [])
             kobold.load_card_overrides(store)
-            raise _back("The asks are back to the built-in ones.", "asks")
+            raise _back("The asks and the shared angles are back to the built-in ones.", "asks")
         mine = {}
         for slot, built in kobold.ASKS.items():
             text = " ".join(str(form.get(slot) or "").split())[:400]
             if text and text != built:
                 mine[slot] = text
         store.put("kobold_asks", mine)
+        _save_angles(store, "all", form.get("angles"), kobold.ANGLES)
         kobold.load_card_overrides(store)
         raise _back(f"Saved the asks ({len(mine)} edited).", "asks")
 

@@ -304,6 +304,12 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
         "desk_nudge": ["Haven't seen {quiet_name} in a while. Go say hi!", "Next time: more {quiet_name}, please!",
                        "Next time? Bigger. Louder. More caffeine."],
         "desk_signoff": ["Colette out! ☕", "See you next time, team! Colette out!", "Refilling my mug. Bye bye!! ☕"],
+        # banter (owner 2026-11-22: hosts answering each other): Colette's short answer on CLARK's opener card
+        # (``review_candidates`` slot "reply"; KoboldCpp writes real answers, these are the stand-ins)
+        "reply": ["Clark, that was almost excitement. I'm SO proud of you!! ☕",
+                  "What Clark means is: it was AMAZING. You're welcome!",
+                  "Filed, noted, cross-referenced... and I added the exclamation marks!!",
+                  "Somebody get this man a coffee. A big one!"],
         # the Sunday preview's opener card (flavrpromo/host_picker.py, label "preview"; ``preview_facts``)
         "ahead_busy": ["NEW WEEK!! ☕ {planned_text} on the board already, {people} people! {busy_day} is stacked!",
                        "Okay team, the week ahead is PACKED: {planned_text}! First up, {first_name} on {first_day}!",
@@ -380,6 +386,11 @@ TEMPLATES: Dict[str, Dict[str, List[str]]] = {
                        "For next time: clip your favourite moments. The archive thanks you."],
         "desk_signoff": ["Cider's on. — Clark", "Filed and closed. — Clark", "Until next time. — Clark",
                          "Be kind, rewind. — Clark", "Away message: filing VODs, back soon. — Clark"],
+        # banter: Clark's short answer on COLETTE's opener card (see Colette's "reply" above)
+        "reply": ["Noted, Colette. Please drink some water as well.",
+                  "I have filed that under 'enthusiasm'. The folder is full.",
+                  "What Colette means is in the report. Page one.",
+                  "Volume acknowledged. The numbers are correct, for the record."],
         "ahead_busy": ["Good morning. The week ahead: {planned_text} on file from {people} people. {busy_day} is the big one.",
                        "{planned_text} scheduled. I've labelled a fresh tape for each. {first_name} opens on {first_day}.",
                        "A full week of Anime Americans: {planned_text}. Best job in the building."],
@@ -430,6 +441,7 @@ SLOT_HELP = {
     "desk_highlight": "desk card highlight: {longest_name} {longest_len} {top_name} {top_count} {new_game} {new_game_name}",
     "desk_nudge": "desk card 'next time': {quiet_name}",
     "desk_signoff": "desk card sign-off",
+    "reply": "banter: this host's short answer on the OTHER host's opener card (no blanks)",
     "ahead_busy": "Sunday preview opener, 6+ planned: {planned_text} {people} {busy_day} {busy_count} {first_name} {first_day} {first_time}",
     "ahead_normal": "Sunday preview opener: {planned_text} {people} {first_name} {first_day} {first_time} {most_name} {most_count}",
     "ahead_quiet": "Sunday preview opener, 1-2 planned: {planned_text} {first_name} {first_day} {first_time}",
@@ -442,11 +454,27 @@ SLOT_HELP = {
 }
 # the settings page's edits (kv host_templates {host: {slot: [lines]}}); a slot there replaces TEMPLATES'
 _overrides: Dict[str, Dict[str, List[str]]] = {}
+# banter (owner 2026-11-22): the other host answers on the opener card. kv hosts_banter (settings page,
+# Hosts; default on), read by ``load_overrides``; off = no "reply" slot is offered anywhere.
+BANTER_SETTING = "hosts_banter"
+_banter = True
+
+
+def banter() -> bool:
+    """True when the hosts answer each other (the "reply" slot of a review, flavrpromo/kobold.py ``write``)."""
+    return _banter
+
+
+def other(key: str) -> str:
+    """The host who isn't ``key`` (who answers ``key``'s opener); ``key`` itself when there is no one else."""
+    return next((k for k in HOSTS if k != key), key)
 
 
 def load_overrides(store: Store) -> None:
-    """Read the edited lines (flavrpromo/__main__.py at start, flavrpromo/settings_page.py after a save)."""
-    global _overrides
+    """Read the edited lines and the banter switch (flavrpromo/__main__.py at start,
+    flavrpromo/settings_page.py after a save)."""
+    global _overrides, _banter
+    _banter = store.get(BANTER_SETTING) is not False
     raw = store.get("host_templates") or {}
     _overrides = {k: {s: [str(x) for x in v] for s, v in (raw.get(k) or {}).items() if isinstance(v, list)}
                   for k in HOSTS}
@@ -625,11 +653,20 @@ def notes(f: Dict[str, Any]) -> List[Dict[str, str]]:
     return out[:3]
 
 
+def _add_reply(out: Dict[str, List[str]], key: str, f: Dict[str, Any]) -> None:
+    """Banter: slot "reply" = the OTHER host's short answers to ``key``'s opener (their "reply" template
+    lines; KoboldCpp's real answers go in front, flavrpromo/kobold.py ``write``). Not with banter off or
+    with a single host. The pages offer "no reply" for it."""
+    if banter() and other(key) != key:
+        out["reply"] = lines(other(key), "reply", f)
+
+
 def review_candidates(key: str, f: Dict[str, Any]) -> Dict[str, List[str]]:
     """Every slot of a review and its candidate lines (the picker page shows them)."""
     out = {"opener": lines(key, f"open_{mood(f)}", f) or lines(key, "open_normal", f)}
     for i, n in enumerate(notes(f)):
         out[f"note{i}"] = lines(key, n["slot"], f)
+    _add_reply(out, key, f)
     out["desk_highlight"] = lines(key, "desk_highlight", f)
     out["desk_nudge"] = lines(key, "desk_nudge", f)
     out["desk_signoff"] = lines(key, "desk_signoff", f)
@@ -703,4 +740,5 @@ def preview_candidates(key: str, f: Dict[str, Any]) -> Dict[str, List[str]]:
            or lines(key, "ahead_empty", f)}
     for i, n in enumerate(preview_notes(f)):
         out[f"note{i}"] = lines(key, n["slot"], f)
+    _add_reply(out, key, f)
     return out

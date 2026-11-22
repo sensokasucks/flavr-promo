@@ -192,13 +192,14 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             assert p["picks"]["desk_signoff"] and host_picker.chosen(p, "opener") == "Big week, people!"
 
             class Kob(kobold.Kobold):
-                # one request per line: answers "Fresh line one!", "Fresh line two!", ... in turn
+                # one request per line: answers "Fresh line one!", "Second take, all new!", ... in turn
+                # (two lines that differ by one word would count as a repeat: kobold.too_close)
                 async def generate(self, text, max_length=200):
                     self.prompt, self.n = text, getattr(self, "n", 0) + 1
-                    return f'"Fresh line {["one", "two"][(self.n - 1) % 2]}!"]'
+                    return f'"{["Fresh line one!", "Second take, all new!"][(self.n - 1) % 2]}"]'
             poster.kobold = Kob(None, "http://pc:5001", per_slot=2)
             p = await act("ask:desk_nudge", on_summary="")
-            assert host_picker.chosen(p, "desk_nudge") == "Fresh line one!" and "Fresh line two!" in p["ai"]
+            assert host_picker.chosen(p, "desk_nudge") == "Fresh line one!" and "Second take, all new!" in p["ai"]
             assert host_picker.chosen(p, "opener") == "Big week, people!"           # the others keep their picks
             p = await act(f"ask:{day}", on_summary="", day_look="host")
             assert host_picker.chosen(p, day) == "Fresh line one!" and "this day's picture" in poster.kobold.prompt

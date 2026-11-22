@@ -21,6 +21,19 @@ text fields are saved in kv "host_cards" ({host: {field: text}}) and the slot as
 "kobold_asks" ({slot: text}); ``load_card_overrides`` puts them in force, and ``card`` / ``asks``
 return the edited text over the built-in one. An emptied field goes back to the built-in text.
 
+Variety (owner 2026-11-22: "they pretty much say the same replies from kobold each time"): every
+request for a slot used to be word for word the same, so only the temperature made a difference.
+Now each request differs in four ways, each with a switch on the settings page (kv "kobold"):
+  angles     a different take per request ("make it a small joke", "use a 90s reference"): ANGLES
+             for both hosts plus HOST_ANGLES for each, editable on the cards page (kv kobold_angles);
+  memory     the last lines a host wrote for that kind of slot (kv host_said) are listed as "already
+             used, don't repeat", and a line that still comes out nearly the same is asked for again;
+  examples   the card's example exchanges are shuffled and only EXAMPLES_MAX of them are sent;
+  chattiness short / normal / chatty fills {length} in the asks (LENGTHS).
+Banter (kv hosts_banter, flavrpromo/hosts.py ``banter``): ``Kobold.replies`` has the OTHER host answer
+the opener (slot "reply" on the picker page and in the article editor), and ``Kobold.chat`` writes a
+tall picture's chat chunk as a real back-and-forth, one request per turn with the speaker's own card.
+
 Who calls it: flavrpromo/host_picker.py (``write`` when a review starts waiting and on the page's
 "Write more" button, ``status`` for the page), flavrpromo/article_editor.py (new host lines for an
 article section), flavrpromo/__main__.py makes one.
@@ -28,13 +41,17 @@ article section), flavrpromo/__main__.py makes one.
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
+import random
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import aiohttp
+
+from . import hosts
 
 log = logging.getLogger("flavrpromo.kobold")
 
@@ -53,22 +70,83 @@ STOPS = ["<START>", "Producer:", "\n\n\n", "<end_of_turn>", "<|im_end|>", "<|eot
 # single complete line, a few sentences are fine, and per_slot requests make the alternatives). {n}
 # still works in an edited ask (it is 1).
 ASKS = {
-    "opener": "Write one opener for the {heading}: a complete line of one to three sentences.",
-    "note": "Write one very short comment (2 to 5 words) on this highlight: {note}.",
-    "desk_highlight": "Write one closing line about the highlight of the {heading} (one to three sentences).",
-    "desk_nudge": "Write one short 'for next time' nudge for the group.",
-    "desk_signoff": "Write one short sign-off line (you are leaving your desk).",
+    "opener": "Write one opener for the {heading}: a complete line of {length}.",
+    "note": "Write one very short comment ({length}) on this highlight: {note}.",
+    "desk_highlight": "Write one closing line about the highlight of the {heading} ({length}).",
+    "desk_nudge": "Write one 'for next time' nudge for the group ({length}).",
+    "desk_signoff": "Write one sign-off line, you are leaving your desk ({length}).",
     # the article editor's day pictures (flavrpromo/article_editor.py ``ask_slot``; the facts are that day's)
-    "day": "Write one line for this day's picture about who streams and when (one to three sentences).",
+    "day": "Write one line for this day's picture about who streams and when ({length}).",
     # the tall pictures' stream and game chunks (flavrpromo/recipes.py ``write_line``; the facts are that stream's / game's)
     # (owner's first try 2026-11-22: the model just read the facts back, "X spent over four hours on YouTube
     # playing ..."; the name, day, length and title are printed next to the remark, so it is told to react instead)
-    "stream": "Write one short reaction to this stream in your own voice (one or two sentences): a joke, a cheer or "
+    "stream": "Write one reaction to this stream in your own voice ({length}): a joke, a cheer or "
               "what made it fun. Do not repeat the streamer's name, the day, the length, the platform or the title; "
               "they are already printed next to your line.",
-    "game": "Write one short reaction to this game being played this week, in your own voice (one or two sentences). "
+    "game": "Write one reaction to this game being played this week, in your own voice ({length}). "
             "Do not list who played it or how many streams; that is already printed next to your line.",
+    # banter (owner 2026-11-22: hosts answering each other). {name} = the host being answered, {line} = what
+    # they said. "reply": the other host's answer on the opener card (``Kobold.replies``); "chat" opens a tall
+    # picture's chat chunk and "chat_reply" is every turn after it (``Kobold.chat``).
+    "reply": "{name} just opened the {heading} with: \"{line}\" Write your one reply to {name} ({length}): react to "
+             "what they said or how they said it, in your own voice. Do not repeat their line.",
+    "chat": "You are chatting with {name} about the {heading}. Start the chat with one remark to {name} ({length}).",
+    "chat_reply": "You are chatting with {name} about the {heading}. {name} just said: \"{line}\" Write your one "
+                  "answer to {name} ({length}): react to them, then add something of your own. Do not repeat their line.",
 }
+
+# How long a line may be, by kind of slot (the ASKS keys) and the settings page's Chattiness: what {length}
+# in an ask becomes. An ask the owner edited without {length} stays exactly as typed.
+CHATTY = ("short", "normal", "chatty")
+_LONG = ("one sentence", "one to three sentences", "two to four sentences, at most 70 words")
+_MID = ("one short sentence", "one or two sentences", "two to four sentences, at most 60 words")
+_BRIEF = ("a few words", "one short sentence", "one or two sentences")
+_CHAT = ("a few words", "one short sentence, at most 16 words", "one or two short sentences, at most 28 words")
+LENGTHS = {"opener": _LONG, "desk_highlight": _LONG, "day": _LONG, "stream": _MID, "game": _MID,
+           "note": ("1 to 3 words", "2 to 5 words", "4 to 8 words"),
+           "desk_nudge": _BRIEF, "desk_signoff": _BRIEF,
+           "reply": ("a few words", "one short sentence, at most 20 words", "one or two sentences, at most 30 words"),
+           # a chat chunk's bubbles are small (flavrpromo/tall.py "chat"): its lines stay short
+           "chat": _CHAT, "chat_reply": _CHAT}
+MAX_TOKENS = {"short": 160, "normal": 200, "chatty": 300}     # generate's max_length for one line
+
+# Angles: one is added to each request so the lines differ by more than luck. ANGLES fit either host and
+# any longer line; HOST_ANGLES are each host's own habits (also used alone for the short slots, SHORT_KINDS).
+# The cards page edits both (kv kobold_angles {"all": [...], "<host>": [...]}, one per row).
+ANGLES = [
+    "Make it a small joke.",
+    "Open with a question to the viewers.",
+    "Pick ONE of the facts and talk only about that one.",
+    "Sound honestly impressed.",
+    "Announce it like breaking news.",
+    "Compare it to something from everyday life.",
+    "Talk straight to one of the people in the facts, by name.",
+    "Understate it on purpose.",
+    "Start in the middle of a thought, as if you were interrupted.",
+    "Tease the other host a little.",
+    "Say what you are looking forward to next.",
+    "Start with a sound or a one-word reaction.",
+]
+HOST_ANGLES = {
+    "colette": ["Work in your coffee, or how little you slept.", "Use CAPS on exactly one word.",
+                "Mention the office printer you talk to.", "Bring up croissants or your 'French' side.",
+                "Cheer for one streamer like their biggest fan.", "Tease Clark for being so calm."],
+    "clark": ["Work in ONE 90s reference (a VCR, dial-up, an AIM away message, holo cards, Saturday-morning reruns).",
+              "Talk about it as paperwork: filed, noted, cross-referenced.",
+              "Call the streamers 'Anime Americans', affectionately.",
+              "Mention your warm drink or a good bun.",
+              "Let your inner fan slip out for a moment, then be professional again.",
+              "Mention Colette's chaos, patiently."],
+}
+NO_ANGLE = ("note",)                                            # a comment of a few words has no room for one
+SHORT_KINDS = ("desk_nudge", "desk_signoff", "reply")           # short lines: the host's own habits only
+
+EXAMPLES_MAX = 3            # example exchanges sent per request when shuffling (a card can hold more)
+SAID_KEY = "host_said"      # kv {host: {kind: [line, ...]}}: what KoboldCpp wrote before, newest last
+SAID_KEEP = 30              # lines kept per host and kind
+MEMORY = 12                 # of those, how many a request lists as "already used" (settings page; 0 = off)
+AVOID_CHARS = 140           # an "already used" line is cut to this many characters in the prompt
+CLOSE = 0.82                # difflib ratio from which two lines count as the same line again
 
 
 # the card fields the settings page edits, in the order the prompt uses them, with a short help line
@@ -83,6 +161,7 @@ CARD_FIELDS = {
 }
 _card_edits: Dict[str, Dict[str, str]] = {}     # kv host_cards, loaded by load_card_overrides
 _ask_edits: Dict[str, str] = {}                 # kv kobold_asks
+_angle_edits: Dict[str, List[str]] = {}         # kv kobold_angles ("all" + one list per host)
 
 
 def builtin_card(key: str) -> Dict[str, Any]:
@@ -105,13 +184,66 @@ def asks() -> Dict[str, str]:
     return {s: (_ask_edits.get(s) or "").strip() or a for s, a in ASKS.items()}
 
 
+def angles(key: str, kind: str = "") -> List[str]:
+    """The angles a request of ``kind`` for host ``key`` can get ([] = none for that kind): the shared
+    ones plus the host's own, or only the host's own for a short line. The cards page's edits win."""
+    if kind in NO_ANGLE:
+        return []
+    own = _angle_edits.get(key) or HOST_ANGLES.get(key, [])
+    return list(own) if kind in SHORT_KINDS else list(_angle_edits.get("all") or ANGLES) + list(own)
+
+
 def load_card_overrides(store: Any) -> None:
-    """Put the settings page's card and ask edits in force (flavrpromo/settings_page.py ``apply`` at
-    start, flavrpromo/card_page.py after a save)."""
+    """Put the settings page's card, ask and angle edits in force (flavrpromo/settings_page.py ``apply``
+    at start, flavrpromo/card_page.py after a save)."""
     _card_edits.clear()
     _card_edits.update({k: dict(v) for k, v in (store.get("host_cards") or {}).items() if isinstance(v, dict)})
     _ask_edits.clear()
     _ask_edits.update({k: str(v) for k, v in (store.get("kobold_asks") or {}).items() if k in ASKS})
+    _angle_edits.clear()
+    _angle_edits.update({k: [str(x) for x in v if str(x).strip()]
+                         for k, v in (store.get("kobold_angles") or {}).items() if isinstance(v, list) and v})
+
+
+def said(store: Any, key: str, kind: str, n: int = SAID_KEEP) -> List[str]:
+    """The last ``n`` lines KoboldCpp wrote for host ``key`` in slots of ``kind``, oldest first."""
+    if store is None or not kind or n <= 0:
+        return []
+    return [str(x) for x in ((store.get(SAID_KEY) or {}).get(key) or {}).get(kind) or []][-n:]
+
+
+def remember(store: Any, key: str, kind: str, line: str) -> None:
+    """Add a line KoboldCpp just wrote to the host's memory (kv host_said), so later requests can be
+    told not to repeat it. Kept per kind of slot: openers don't push sign-offs out."""
+    if store is None or not kind or not line:
+        return
+    all_said = dict(store.get(SAID_KEY) or {})
+    mine = dict(all_said.get(key) or {})
+    mine[kind] = ([x for x in mine.get(kind) or [] if x != line] + [line])[-SAID_KEEP:]
+    all_said[key] = mine
+    store.put(SAID_KEY, all_said)
+
+
+def _plain(line: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9']+", line.lower()))
+
+
+def too_close(line: str, others: Any) -> bool:
+    """True when ``line`` is (nearly) one of ``others`` again: the same words give or take a few."""
+    mine = _plain(line)
+    return bool(mine) and any(difflib.SequenceMatcher(None, mine, _plain(o)).ratio() >= CLOSE for o in others if o)
+
+
+def examples(text: str, rng: Optional[random.Random] = None) -> str:
+    """A card's example exchanges (blocks that start with <START>) in a random order, at most
+    EXAMPLES_MAX of them, so the model doesn't lean on the same example every time. ``rng`` None =
+    as written (shuffling off)."""
+    if rng is None:
+        return text
+    blocks = [b.strip() for b in str(text or "").split("<START>") if b.strip()]
+    if len(blocks) < 2:
+        return text
+    return "\n".join("<START>\n" + b for b in rng.sample(blocks, min(len(blocks), EXAMPLES_MAX)))
 
 
 def games_text(rows: List[Dict[str, Any]], planned: bool = False) -> str:
@@ -160,25 +292,43 @@ def facts_text(f: Dict[str, Any]) -> str:
     return ", ".join(parts) + "."
 
 
-def prompt(key: str, ask: str, facts: str) -> str:
-    """The whole prompt for one request (KoboldCpp's plain text completion)."""
+def prompt(key: str, ask: str, facts: str, angle: str = "", avoid: Any = (),
+           rng: Optional[random.Random] = None) -> str:
+    """The whole prompt for one request (KoboldCpp's plain text completion). ``angle``: this request's
+    take (``angles``); ``avoid``: lines already used, listed as "do not repeat"; ``rng``: shuffles the
+    card's examples (``examples``; None = as written)."""
     c = card(key)
     name = c.get("name") or key.title()
     sub = lambda s: str(s or "").replace("{{char}}", name).replace("{{user}}", "Producer")  # noqa: E731
     head = "\n".join(x for x in (sub(c.get("system_prompt")), f"{name}: {sub(c.get('description'))}",
                                  f"Personality: {sub(c.get('personality'))}", f"Scenario: {sub(c.get('scenario'))}")
                      if x.strip())
-    return (f"{head}\n{sub(c.get('mes_example'))}\n<START>\nProducer: Facts: {facts} {ask} "
+    extra = f" For this one: {angle}" if angle else ""
+    used = [" ".join(str(x).split())[:AVOID_CHARS] for x in avoid if x]
+    if used:
+        extra += (" You already used these lines; do not reuse their wording, their first words or their joke: "
+                  + " | ".join(f'"{x}"' for x in used) + ".")
+    return (f"{head}\n{sub(examples(c.get('mes_example'), rng))}\n<START>\nProducer: Facts: {facts} {ask}{extra} "
             f"{sub(c.get('post_history_instructions'))}\n{name}: [")
 
 
-def fill_ask(ask: str, n: int, heading: str) -> str:
-    """One slot's ask with {n} and {heading} filled in. An edited ask with a stray brace is used as
-    typed instead of failing (format would raise)."""
+def length_of(kind: str, chatty: str = "normal") -> str:
+    """What {length} in an ask becomes for a slot of ``kind`` at the settings page's Chattiness."""
+    return LENGTHS.get(kind, _LONG)[CHATTY.index(chatty) if chatty in CHATTY else 1]
+
+
+def fill_ask(ask: str, n: int, heading: str, length: str = "", name: str = "", line: str = "") -> str:
+    """One slot's ask with its blanks filled in: {n}, {heading}, {length} (``length_of``; the normal
+    opener length when not given) and, for banter, {name} and {line} (who is answered and what they
+    said). An edited ask with a stray brace is used as typed instead of failing (format would raise)."""
+    length = length or length_of("opener")
     try:
-        return ask.format(n=n, heading=heading.lower())
+        return ask.format(n=n, heading=heading.lower(), length=length, name=name, line=line, note="{note}")
     except (KeyError, IndexError, ValueError):
-        return ask.replace("{n}", str(n)).replace("{heading}", heading.lower())
+        for blank, value in (("{n}", str(n)), ("{heading}", heading.lower()), ("{length}", length),
+                             ("{name}", name), ("{line}", line)):
+            ask = ask.replace(blank, value)
+        return ask
 
 
 def as_line(text: str) -> str:
@@ -219,13 +369,21 @@ class Kobold:
     """One KoboldCpp server (KOBOLD_URL). Every call fails soft: offline = no AI lines, never an error."""
 
     def __init__(self, http: aiohttp.ClientSession, url: str, key: str = "", temperature: float = 0.8,
-                 per_slot: int = PER_SLOT):
+                 per_slot: int = PER_SLOT, store: Any = None, angles: bool = True, shuffle: bool = True,
+                 memory: int = MEMORY, chatty: str = "normal"):
         self.http = http
         self.url = url.rstrip("/")
         self.key = key
         self.temperature = temperature      # 0.1 (plain) .. 1.5 (wild); the settings page sets it
         self.per_slot = per_slot            # lines asked for in each slot (1-6)
         self.last_raw = ""                  # the newest answer as it came (settings page test, picker state)
+        # variety (see the module docstring; flavrpromo/settings_page.py ``apply`` passes the settings)
+        self.store = store                  # the bot's kv store for the hosts' memory (None = no memory)
+        self.angles = angles                # a different take per request
+        self.shuffle = shuffle              # shuffle the card's examples
+        self.memory = max(0, int(memory))   # "already used" lines listed per request (0 = off)
+        self.chatty = chatty if chatty in CHATTY else "normal"
+        self.rng = random.Random()          # tests seed it
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.key}"} if self.key else {}
@@ -243,8 +401,8 @@ class Kobold:
 
     async def generate(self, text: str, max_length: int = 0) -> Optional[str]:
         """KoboldCpp's answer to ``text`` (None = unreachable / an error). ``max_length`` in tokens
-        (0 = enough for one line of a few sentences: 200)."""
-        max_length = max_length or 200
+        (0 = enough for one line at the Chattiness setting: MAX_TOKENS)."""
+        max_length = max_length or MAX_TOKENS[self.chatty]
         try:
             async with self.http.post(f"{self.url}/api/v1/generate", headers=self._headers(),
                                       timeout=aiohttp.ClientTimeout(total=TIMEOUT),
@@ -263,41 +421,104 @@ class Kobold:
             log.info("KoboldCpp unreachable: %s", e)
             return None
 
+    def _angles(self, key: str, kind: str, n: int) -> List[str]:
+        """``n`` angles for ``n`` requests, all different while the list lasts ("" = no angle)."""
+        pool = angles(key, kind) if self.angles else []
+        if not pool:
+            return [""] * n
+        picked = self.rng.sample(pool, min(n, len(pool)))
+        return picked + [self.rng.choice(pool) for _ in range(n - len(picked))]
+
+    async def line(self, key: str, ask: str, heading: str, facts: Any, kind: str = "", avoid: Any = (),
+                   angle: Optional[str] = None, retry: bool = True, name: str = "", said_line: str = "") -> Optional[str]:
+        """ONE new line for a slot (one request; "" = it answered with nothing usable, None =
+        unreachable). ``facts``: a facts dict (hosts.facts) or the facts sentence itself.
+        ``kind``: the kind of slot (an ASKS key: sets {length}, the angles and which memory is used;
+        "" = an opener's length, no memory). ``avoid``: more lines not to repeat (the batch so far).
+        ``angle``: this request's take (None = pick one). ``retry``: a line that comes out nearly the
+        same as a remembered one is asked for once more with another angle. ``name`` / ``said_line``:
+        the banter blanks (who is answered, what they said)."""
+        text = facts if isinstance(facts, str) else facts_text(facts)
+        full = fill_ask(ask, 1, heading, length_of(kind or "opener", self.chatty), name, said_line)
+        used = list(avoid) + [x for x in said(self.store, key, kind, self.memory) if x not in avoid]
+        if angle is None:
+            angle = self._angles(key, kind, 1)[0]
+        rng = self.rng if self.shuffle else None
+        got = await self.generate(prompt(key, full, text, angle, used, rng))
+        if got is None:
+            return None
+        new = as_line(got)
+        if new and retry and too_close(new, used):
+            other = next((a for a in self._angles(key, kind, 3) if a != angle), angle)
+            again = await self.generate(prompt(key, full, text, other, used + [new], rng))
+            if again is not None and as_line(again):
+                new = as_line(again)
+        remember(self.store, key, kind, new)
+        return new
+
+    async def lines(self, key: str, ask: str, heading: str, facts: Any, n: int = 0, kind: str = "",
+                    name: str = "", said_line: str = "") -> Optional[List[str]]:
+        """``n`` (default per_slot) different lines for a slot, one request each, each with its own
+        angle and told what the earlier ones said; one that still repeats is dropped. None = unreachable."""
+        n = n or self.per_slot
+        out: List[str] = []
+        for angle in self._angles(key, kind, n):
+            got = await self.line(key, ask, heading, facts, kind, list(out), angle, False, name, said_line)
+            if got is None:
+                return out or None
+            if got and not too_close(got, out):
+                out.append(got)
+        return out
+
     async def write(self, key: str, facts: Dict[str, Any], heading: str,
-                    notes: List[Dict[str, str]], only: tuple = ()) -> Dict[str, List[str]]:
+                    notes: List[Dict[str, str]], only: tuple = (), reply_to: str = "") -> Dict[str, List[str]]:
         """New lines for every slot of a review: {slot: [lines]} (empty slots left out; {} when offline).
         ``only``: slot name starts to ask for (("opener", "note") = the opener card's slots; the
-        article editor's host sections), () = all."""
+        article editor's host sections), () = all. With banter on (flavrpromo/hosts.py ``banter``) the
+        other host's answers to the opener come too (slot "reply"): to the first new opener, else to
+        ``reply_to`` (the opener picked on the page)."""
         a = asks()
         todo = [("opener", a["opener"])]
         todo += [(f"note{i}", a["note"].replace("{note}", f"{n['label'].lower()}: {n['value']}"))
                  for i, n in enumerate(notes)]
+        if hosts.banter() and hosts.other(key) != key:
+            todo.append(("reply", a["reply"]))
         todo += [(s, a[s]) for s in ("desk_highlight", "desk_nudge", "desk_signoff")]
         if only:
             todo = [(s, x) for s, x in todo if any(s.startswith(o) for o in only)]
         out: Dict[str, List[str]] = {}
         for slot, ask in todo:
-            got = await self.lines(key, ask, heading, facts)
+            if slot == "reply":
+                base = (out.get("opener") or [reply_to])[0]
+                got = await self.replies(hosts.other(key), key, base, heading, facts) if base else []
+            else:
+                got = await self.lines(key, ask, heading, facts, kind="note" if slot.startswith("note") else slot)
             if got is None:
                 break                       # offline or failing: stop asking for this review
             if got:
                 out[slot] = got
         return out
 
-    async def line(self, key: str, ask: str, heading: str, facts: Any) -> Optional[str]:
-        """ONE new line for a slot (one request; "" = it answered with nothing usable, None =
-        unreachable). ``facts``: a facts dict (hosts.facts) or the facts sentence itself."""
-        text = facts if isinstance(facts, str) else facts_text(facts)
-        got = await self.generate(prompt(key, fill_ask(ask, 1, heading), text))
-        return None if got is None else as_line(got)
+    async def replies(self, key: str, to: str, said_line: str, heading: str, facts: Any, n: int = 0) -> Optional[List[str]]:
+        """Banter: host ``key``'s short answers to what host ``to`` just said (``said_line``), ``n``
+        (default per_slot) to pick from, written with ``key``'s own card. None = unreachable."""
+        return await self.lines(key, asks()["reply"], heading, facts, n, "reply",
+                                hosts.HOSTS.get(to, {}).get("name", to.title()), said_line)
 
-    async def lines(self, key: str, ask: str, heading: str, facts: Any, n: int = 0) -> Optional[List[str]]:
-        """``n`` (default per_slot) different lines for a slot, one request each; None = unreachable."""
+    async def chat(self, first: str, second: str, heading: str, facts: Any, turns: int = 4) -> Optional[List[str]]:
+        """Banter for a tall picture's chat chunk: ``turns`` lines, ``first`` and ``second`` taking turns
+        (one request per turn, each with the speaker's own card and the line it answers). The lines so
+        far when KoboldCpp stops answering midway; None when it never answered."""
+        name = lambda k: hosts.HOSTS.get(k, {}).get("name", k.title())  # noqa: E731
         out: List[str] = []
-        for _ in range(n or self.per_slot):
-            got = await self.line(key, ask, heading, facts)
+        for i in range(turns):
+            me, them = (first, second) if i % 2 == 0 else (second, first)
+            kind = "chat_reply" if out else "chat"
+            got = await self.line(me, asks()[kind], heading, facts, kind, list(out), None, True,
+                                  name(them), out[-1] if out else "")
             if got is None:
                 return out or None
-            if got and got not in out:
-                out.append(got)
+            if not got:
+                break
+            out.append(got)
         return out

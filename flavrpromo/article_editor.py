@@ -83,7 +83,8 @@ WHICH: Tuple[Tuple[str, str, str, int], ...] = (
 WEEK_HEADINGS = {0: "This Week", -1: "Last Week", 1: "Next Week"}
 HOST_SECTIONS = {"intro": "Host intro", "outro": "Host outro"}
 # a host section's slots (host_picker / hosts.review_candidates names) and the KoboldCpp slots it asks for
-SLOTS = {"intro": ("opener", "note"), "outro": ("desk_highlight", "desk_nudge", "desk_signoff")}
+# ("reply" = banter: the other host's answer on the opener card, flavrpromo/hosts.py ``_add_reply``)
+SLOTS = {"intro": ("opener", "note", "reply"), "outro": ("desk_highlight", "desk_nudge", "desk_signoff")}
 # picture choices for a host section: the two cards, or one of the host's pictures on its own
 # ("pic:<kind>", hosts.KINDS; the prefix keeps the desk card apart from the plain desk picture)
 CARD_PICS = {"opener": "Opener card", "desk": "Desk card", "none": "No picture"}
@@ -195,7 +196,7 @@ def slot_section(slot: str) -> str:
     """Which section a slot's lines belong to (the page jumps back there after its buttons)."""
     if slot.startswith("day"):
         return slot
-    return "intro" if slot.startswith(("opener", "note")) else "outro"
+    return "intro" if slot.startswith(SLOTS["intro"]) else "outro"
 
 
 def reroll(p: Dict[str, Any], slot: str) -> str:
@@ -215,17 +216,25 @@ def reroll(p: Dict[str, Any], slot: str) -> str:
     return "Another line." if order[0] != cur else "That's the only template line for it."
 
 
-def _ask_of(p: Dict[str, Any], slot: str) -> Tuple[str, str]:
-    """(ask, facts sentence) KoboldCpp gets for one slot: a day picture uses that day's facts, a note
-    names its highlight, the rest the review's facts."""
+def _ask_of(p: Dict[str, Any], slot: str) -> Tuple[str, str, Dict[str, str]]:
+    """(ask, facts sentence, the rest of kobold.Kobold.line's arguments) for one slot: a day picture
+    uses that day's facts, a note names its highlight, the rest the review's facts. The rest: ``key``
+    (who speaks: the draft's host, or the OTHER host for the banter slot "reply"), ``kind`` (the kind
+    of slot: its length, angles and memory) and, for "reply", ``name`` / ``said_line`` (who is
+    answered and the opener picked now)."""
     a = kobold.asks()
+    more = {"key": p["host"], "kind": slot}
     if slot.startswith("day"):
-        return a["day"], (p.get("day_text") or {}).get(slot[3:], "")
+        return a["day"], (p.get("day_text") or {}).get(slot[3:], ""), dict(more, kind="day")
     facts = kobold.facts_text(p.get("facts") or {})
     if slot.startswith("note"):
         n = (p.get("notes") or [{}] * 4)[int(slot[4:])]
-        return a["note"].replace("{note}", f"{n.get('label', '').lower()}: {n.get('value', '')}"), facts
-    return a.get(slot, a["opener"]), facts
+        return (a["note"].replace("{note}", f"{n.get('label', '').lower()}: {n.get('value', '')}"), facts,
+                dict(more, kind="note"))
+    if slot == "reply":
+        return a["reply"], facts, {"key": hosts.other(p["host"]), "kind": "reply",
+                                   "name": hosts.HOSTS[p["host"]]["name"], "said_line": host_picker.chosen(p, "opener")}
+    return a.get(slot, a["opener"]), facts, dict(more, kind=slot if slot in a else "opener")
 
 
 async def ask_slot(poster: Any, p: Dict[str, Any], slot: str) -> str:
@@ -235,8 +244,10 @@ async def ask_slot(poster: Any, p: Dict[str, Any], slot: str) -> str:
     kob = getattr(poster, "kobold", None)
     if kob is None:
         return "KoboldCpp isn't set up (Settings → KoboldCpp)."
-    ask, facts = _ask_of(p, slot)
-    new = await kob.lines(p["host"], ask, host_picker.heading_of(p, "review"), facts)
+    ask, facts, more = _ask_of(p, slot)
+    if slot == "reply" and not more["said_line"]:
+        return "Pick an opener first: the reply answers it."
+    new = await kob.lines(more.pop("key"), ask, host_picker.heading_of(p, "review"), facts, **more)
     if new is None:
         return "KoboldCpp couldn't be reached."
     if not new:
@@ -256,8 +267,9 @@ async def redo_line(poster: Any, p: Dict[str, Any], slot: str, i: int) -> str:
     cands = (p.get("candidates") or {}).get(slot) or []
     if kob is None or not 0 <= i < len(cands):
         return "KoboldCpp isn't set up (Settings → KoboldCpp)." if kob is None else "That line is gone."
-    ask, facts = _ask_of(p, slot)
-    new = await kob.line(p["host"], ask, host_picker.heading_of(p, "review"), facts)
+    ask, facts, more = _ask_of(p, slot)
+    new = await kob.line(more.pop("key"), ask, host_picker.heading_of(p, "review"), facts,
+                         avoid=[x for x in cands if x], **more)
     if new is None:
         return "KoboldCpp couldn't be reached."
     if not new or new in cands:
@@ -391,7 +403,10 @@ def section_html(dkey: str, p: Dict[str, Any], s: Dict[str, Any]) -> str:
         who = f"<b>{e(h['emoji'])} {e(h['name'])}:</b> "
         if sid == "intro":
             line = host_picker.chosen(p, "opener")
-            return block + (f"<p>{who}{e(line)}</p>" if line else "")
+            reply = host_picker.chosen(p, "reply") if line else ""      # banter: the other host answers
+            o = hosts.HOSTS[hosts.other(p["host"])]
+            return block + (f"<p>{who}{e(line)}</p>" if line else "") + \
+                (f"<p><b>{e(o['emoji'])} {e(o['name'])}:</b> {e(reply)}</p>" if reply else "")
         rows = [host_picker.chosen(p, x) for x in SLOTS["outro"]]
         rows = [x for x in rows if x]
         return block + "".join(f"<p>{who if i == 0 else ''}{'<i>' if i == len(rows) - 1 and i else ''}{e(x)}"
@@ -462,7 +477,9 @@ def _host_controls(dkey: str, p: Dict[str, Any], sid: str, ai_on: bool) -> str:
         if slot.startswith("note"):
             n = (p.get("notes") or [])[int(slot[4:])] if int(slot[4:]) < len(p.get("notes") or []) else {}
             title = f"opener card note: {n.get('label', '').lower()} ({n.get('value', '')})"
-        rows.append(_line_choices(p, slot, title, ai_on))
+        if slot == "reply":                     # banter: the other host answers the opener picked above
+            title = f"{hosts.HOSTS[hosts.other(p['host'])]['name']} answers the opener"
+        rows.append(_line_choices(p, slot, title, ai_on, none="no reply this time" if slot == "reply" else ""))
     cur = (p.get("pics") or {}).get(sid, "none")
     pics = list(CARD_PICS.items()) + [(f"pic:{k}", f"Just the picture: {k.replace('_', ' ')}")
                                       for k, v in hosts.pictures(p["host"]).items() if v]

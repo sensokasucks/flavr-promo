@@ -39,6 +39,7 @@ RECIPES = {"games": "Games this week", "day": "One day in detail", "person": "On
 HEAD_H = tall.height({"type": "header", "size": 0})       # px: the header strip of a recipe picture
 FOOT_H = tall.height({"type": "footer", "size": 0})       # px: the sign-off strip (the last picture only)
 LINE_TYPES = ("stream", "game")                           # chunk types that carry a KoboldCpp remark
+CHAT_LINE = 220                                           # characters kept of one chat line (tall_page caps the box)
 _tasks: Dict[str, "asyncio.Task[None]"] = {}              # "<draft key>|<tall id>" → background writer
 
 AI_STATES = {"writing": "writing the remarks… refresh in a minute or two", "done": "the remarks are written",
@@ -134,7 +135,7 @@ async def write_line(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any
     if not facts:
         return "", "Pick a stream or game for that chunk first."
     host = c.get("host") if c.get("host") in hosts.HOSTS else p["host"]
-    new = await kob.line(host, kobold.asks()[c["type"]], host_picker.heading_of(p, "review"), facts)
+    new = await kob.line(host, kobold.asks()[c["type"]], host_picker.heading_of(p, "review"), facts, kind=c["type"])
     if new is None:
         return "", "KoboldCpp couldn't be reached."
     if not new:
@@ -153,12 +154,33 @@ async def write_choices(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, 
     if not facts:
         return [], "Pick a stream or game for that chunk first."
     host = c.get("host") if c.get("host") in hosts.HOSTS else p["host"]
-    new = await kob.lines(host, kobold.asks()[c["type"]], host_picker.heading_of(p, "review"), facts)
+    new = await kob.lines(host, kobold.asks()[c["type"]], host_picker.heading_of(p, "review"), facts, kind=c["type"])
     if new is None:
         return [], "KoboldCpp couldn't be reached."
     if not new:
         return [], f"KoboldCpp answered, but with no usable line. Try again. Its answer: {kob.last_raw[:200]}"
     return new, f"✨ {len(new)} remark{'' if len(new) == 1 else 's'} to pick from (the first is in)."
+
+
+CHAT_TURNS = 4              # lines KoboldCpp writes for a chat chunk (the chunk draws up to 5)
+
+
+async def write_chat(poster: Any, p: Dict[str, Any], c: Dict[str, Any]) -> Tuple[str, str]:
+    """✨ on a chat chunk (owner 2026-11-22: hosts answering each other): (the chat's rows, one per line, or
+    ""; note for the page). The chunk's two hosts take turns about the review's facts, one request per
+    turn (kobold.Kobold.chat), the first speaker being the chunk's own (else the article's host)."""
+    kob = getattr(poster, "kobold", None)
+    if kob is None:
+        return "", "KoboldCpp isn't set up (Settings → KoboldCpp)."
+    first = c.get("host") if c.get("host") in hosts.HOSTS else p["host"]
+    second = c.get("other") if c.get("other") in hosts.HOSTS and c.get("other") != first else hosts.other(first)
+    got = await kob.chat(first, second, host_picker.heading_of(p, "review"), kobold.facts_text(p.get("facts") or {}),
+                         CHAT_TURNS)
+    if got is None:
+        return "", "KoboldCpp couldn't be reached."
+    if not got:
+        return "", f"KoboldCpp answered, but with no usable line. Try again. Its answer: {kob.last_raw[:200]}"
+    return "\n".join(x[:CHAT_LINE] for x in got), f"✨ Wrote a chat of {len(got)} lines."
 
 
 def start_lines(poster: Any, dkey: str, tid: str, week: Any) -> bool:
@@ -180,16 +202,18 @@ async def _write_all(poster: Any, dkey: str, tid: str, week: Any) -> None:
     """The background half of ``start_lines``: one request per empty remark; each is saved as it comes
     (the draft is re-read first, the owner may have edited meanwhile)."""
     store = poster.store
+    # empty remarks, and chat chunks with nothing typed yet (their text field is "lines")
+    field = lambda c: "lines" if c.get("type") == "chat" else "line"     # noqa: E731
     todo = [c["id"] for c in ((store.get(dkey) or {}).get("talls", {}).get(tid, {}).get("chunks") or [])
-            if c.get("type") in LINE_TYPES and not c.get("line")]
+            if (c.get("type") in LINE_TYPES or c.get("type") == "chat") and not c.get(field(c))]
     state = "done"
     for cid in todo:
         p = store.get(dkey)
         c = next((x for x in (p or {}).get("talls", {}).get(tid, {}).get("chunks", []) if x["id"] == cid), None)
-        if c is None or c.get("line"):
+        if c is None or c.get(field(c)):
             continue
         try:
-            line, _ = await write_line(poster, p, week, c)
+            line, _ = await write_chat(poster, p, c) if c["type"] == "chat" else await write_line(poster, p, week, c)
         except Exception:
             log.exception("KoboldCpp remark failed")
             line = ""
@@ -198,8 +222,8 @@ async def _write_all(poster: Any, dkey: str, tid: str, week: Any) -> None:
         if not line:
             state = "offline" if not str(getattr(poster.kobold, "last_raw", "") or "").strip() else "nolines"
             break
-        if c is not None and not c.get("line"):
-            c["line"] = line
+        if c is not None and not c.get(field(c)):
+            c[field(c)] = line
             p["saved_at"] = time.time()
             store.put(dkey, p)
     p = store.get(dkey)
