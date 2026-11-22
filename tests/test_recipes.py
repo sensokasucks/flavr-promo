@@ -162,7 +162,8 @@ async def test_recipes_build_sections_and_kobold_writes_remarks_from_the_facts(t
             # ✨ write all: only the empty remarks, in the background
             await build("tall1", "save", c3__line="Keep me.")
             before = poster.store.get(dkey)["talls"]["tall1"]["chunks"]
-            empties = sum(1 for x in before if x["type"] == "game" and not x["line"])
+            # (the sign-off strip's empty line is written too, from what the picture shows)
+            empties = sum(1 for x in before if x["type"] in ("game", "footer") and not x["line"])
             asked = len(kob.asked)
             await build("tall1", "aiall")
             for _ in range(50):
@@ -172,6 +173,8 @@ async def test_recipes_build_sections_and_kobold_writes_remarks_from_the_facts(t
             ch = poster.store.get(dkey)["talls"]["tall1"]
             assert ch["ai_state"] == "done" and ch["chunks"][2]["line"] == "Keep me."
             assert len(kob.asked) - asked == empties                    # one request per empty remark, none for c3
+            assert kob.kinds[-1] == "tall_signoff" and "It shows: games played:" in kob.asked[-1][2]
+            assert ch["chunks"][-1]["type"] == "footer" and ch["chunks"][-1]["line"] == "A cosy one."
             assert all(x["line"] for x in ch["chunks"] if x["type"] == "game")
             # KoboldCpp offline: a clear note, nothing written
             poster.kobold = None

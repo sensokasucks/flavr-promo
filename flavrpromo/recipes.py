@@ -25,6 +25,15 @@ both set on the chunk in the builder:
           kept yet (``_details``, through poster.game_info).
   hint    a few words of the owner's the host should work in ("they finally beat the boss"); it joins the
           facts as "The producer adds: ...".
+Host moments and the sign-off strip (SUMMARY_TYPES; owner 2026-11-22: "the sign off card has no way to
+generate lines with kobold. ideally, it could read the other chunks to make a summary"): their ✨ uses the
+asks "tall_host" / "tall_signoff" and the facts are what the picture's OTHER chunks show (``stack_facts``:
+the header, each stream, the games, a day's streams, the highlight numbers), so the line sums the picture
+up. They take a ``hint`` too.
+
+A tall picture can have its own host style (p["talls"][tid]["host"], the builder's Look card): ``as_tall``
+gives the draft as that picture sees it, and everything that reads p["host"] for a tall picture gets that.
+``apply_seams`` sets every bottom edge of a stack at once (the recipes' seams menu and the Look card's).
 
 Who calls it: flavrpromo/article_editor.py ("+ Add a tall section" and the ✨ on a tall section),
 flavrpromo/tall_page.py (✨ on a chunk, the drawing context). No network of its own except KoboldCpp.
@@ -47,6 +56,8 @@ RECIPES = {"games": "Games this week", "day": "One day in detail", "person": "On
 HEAD_H = tall.height({"type": "header", "size": 0})       # px: the header strip of a recipe picture
 FOOT_H = tall.height({"type": "footer", "size": 0})       # px: the sign-off strip (the last picture only)
 LINE_TYPES = ("stream", "game")                           # chunk types that carry a KoboldCpp remark
+SUMMARY_TYPES = ("host", "footer")                        # chunk types whose line ✨ writes from the whole picture
+SUMMARY_ITEMS = 12                                        # streams listed in a picture's summary facts (the rest: "and n more")
 CHAT_LINE = 220                                           # characters kept of one chat line (tall_page caps the box)
 ABOUT = {"": "the stream (a reaction)", "game": "the game (what it is, why it's fun)"}     # a stream chunk's ``about``
 ABOUT_GAME = {"": "it being played this week (a reaction)", "game": "the game itself (what it is, why it's fun)"}
@@ -138,9 +149,65 @@ def game_facts(row: Dict[str, Any], info: Dict[str, Any], deep: bool = False) ->
     return text + (f". {row['game']} is {_about(info)}" if _about(info) else "") + "."
 
 
+def as_tall(p: Dict[str, Any], tid: str) -> Dict[str, Any]:
+    """The draft as tall picture ``tid`` sees it: with the picture's own host style when it has one
+    (p["talls"][tid]["host"], set on the builder's Look card) in place of the article's host. A copy of
+    the top level only: its chunks, lines and facts are the draft's own objects."""
+    own = ((p.get("talls") or {}).get(tid) or {}).get("host")
+    return dict(p, host=own) if own in hosts.HOSTS and own != p.get("host") else p
+
+
+def _stream_short(week: Any, t: Any) -> str:
+    """One stream in a few words for a picture's summary: "Lulu streamed Valheim on Monday for 3 hours"
+    (a stream with no known game goes by its title)."""
+    d = next((i for i, tiles in enumerate(week.days) if any(x is t for x in tiles)), None)
+    day = f" on {week.date_of(d).strftime('%A')}" if d is not None else ""
+    title = " ".join(w for w in str(t.title or "").split() if not w.startswith("#"))
+    what = f" {t.game}" if t.game else (f' "{title}"' if title else "")
+    if t.kind == "past":
+        return f"{t.name} streamed{what}{day}" + (f" for {hosts.length_words(t.length)}" if t.end else "")
+    return f"{t.name} is live now{' with' + what if what else ''}" if t.kind == "live" else f"{t.name} plans{what or ' a stream'}{day}"
+
+
+def stack_facts(store: Any, p: Dict[str, Any], week: Any, chunks: List[Dict[str, Any]]) -> str:
+    """What a tall picture shows, as the facts sentence for a host moment's or sign-off strip's line: its
+    header, then what its stream, game, day and number chunks hold, in order (at most SUMMARY_ITEMS
+    streams). A stack with none of those falls back to the review's own facts."""
+    title, streams, games_, extra = "", [], [], []
+    rows = {r["game"].lower(): r for r in game_rows(p.get("facts") or {}, week)}
+    for c in chunks:
+        t = c.get("type")
+        if t == "header" and not title:
+            title = " ".join(str(c.get("title") or host_picker.heading_of(p, "Week in Review")).split())
+            sub = " ".join(str(c.get("sub") or "").split())
+            title += f" ({sub})" if sub else ""
+        elif t == "stream":
+            _, tile = tall._tile_of(c.get("ref") or "", week)
+            if tile is not None:
+                streams.append(_stream_short(week, tile))
+        elif t == "game" and str(c.get("game") or "").lower() in rows:
+            games_.append(rows[str(c["game"]).lower()])
+        elif t == "grid" and getattr(week, "days", None):
+            d = max(0, min(len(week.days) - 1, int(c.get("day") or 0)))
+            who = ", ".join(f"{x.name} ({x.game})" if x.game else x.name for x in week.days[d])
+            extra.append(f"{week.date_of(d).strftime('%A')}: {who}" if who else f"{week.date_of(d).strftime('%A')} had no streams")
+        elif t == "stats":
+            extra.append("the numbers: " + kobold.facts_text(p.get("facts") or {}).rstrip("."))
+    more = len(streams) - SUMMARY_ITEMS
+    parts = streams[:SUMMARY_ITEMS] + ([f"and {more} more stream{'' if more == 1 else 's'}"] if more > 0 else [])
+    if games_:
+        parts.append(kobold.games_text(games_))
+    parts += extra
+    if not parts:
+        return kobold.facts_text(p.get("facts") or {})
+    return (f'This picture is "{title}". ' if title else "") + "It shows: " + "; ".join(parts) + "."
+
+
 def ask_kind(c: Dict[str, Any]) -> str:
-    """Which kobold.ASKS entry writes this chunk's remark: its type, or the game-talk ask when the chunk's
-    "The remark is about" menu says the game."""
+    """Which kobold.ASKS entry writes this chunk's line: its type, the game-talk ask when the chunk's
+    "The remark is about" menu says the game, or the picture asks for a host moment / sign-off strip."""
+    if c.get("type") in SUMMARY_TYPES:
+        return "tall_signoff" if c.get("type") == "footer" else "tall_host"
     if c.get("about") == "game":
         return "stream_game" if c.get("type") == "stream" else "game_talk"
     return str(c.get("type") or "")
@@ -154,9 +221,12 @@ def chunk_game(p: Dict[str, Any], week: Any, c: Dict[str, Any]) -> str:
     return str(c.get("game") or "") if c.get("type") == "game" else ""
 
 
-def chunk_facts(store: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any]) -> str:
-    """The facts for a chunk's remark ("" = the chunk points at nothing yet), with the owner's ``hint``."""
+def chunk_facts(store: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any], chunks: Any = None) -> str:
+    """The facts for a chunk's line ("" = the chunk points at nothing yet), with the owner's ``hint``.
+    ``chunks``: the whole stack, for a host moment / sign-off strip (their facts are the other chunks)."""
     deep, facts = c.get("about") == "game", ""
+    if c.get("type") in SUMMARY_TYPES:
+        facts = stack_facts(store, p, week, [x for x in chunks or [] if x is not c])
     if c.get("type") == "stream":
         _, t = tall._tile_of(c.get("ref") or "", week)
         facts = stream_facts(store, week, t, deep) if t is not None else ""
@@ -179,23 +249,24 @@ async def _details(poster: Any, game: str) -> None:
         log.info("game details for %s not fetched: %s", game, e)
 
 
-async def _ready(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any]) -> Tuple[str, str]:
-    """(facts, "") for a chunk's remark, or ("", why not) for the page: nothing picked yet, or a remark
-    about the game on a stream whose game isn't known."""
+async def _ready(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any], chunks: Any = None) -> Tuple[str, str]:
+    """(facts, "") for a chunk's line, or ("", why not) for the page: nothing picked yet, or a remark
+    about the game on a stream whose game isn't known. ``chunks``: the whole stack (``chunk_facts``)."""
     game = chunk_game(p, week, c)
     if c.get("about") == "game" and c.get("type") == "stream" and not game and tall._tile_of(c.get("ref") or "", week)[1] is not None:
         return "", "This stream has no game yet. Set it under Game on the chunk, then try again."
     await _details(poster, game)
-    facts = chunk_facts(poster.store, p, week, c)
+    facts = chunk_facts(poster.store, p, week, c, chunks)
     return facts, "" if facts else "Pick a stream or game for that chunk first."
 
 
-async def write_line(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any]) -> Tuple[str, str]:
-    """✨ for one chunk: (new line or "", note for the page). One request; the chunk's own host speaks."""
+async def write_line(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any], chunks: Any = None) -> Tuple[str, str]:
+    """✨ for one chunk: (new line or "", note for the page). One request; the chunk's own host speaks.
+    ``chunks``: the chunk's whole stack (needed for a host moment / sign-off strip)."""
     kob = getattr(poster, "kobold", None)
     if kob is None:
         return "", "KoboldCpp isn't set up (Settings → KoboldCpp)."
-    facts, why = await _ready(poster, p, week, c)
+    facts, why = await _ready(poster, p, week, c, chunks)
     if not facts:
         return "", why
     host = c.get("host") if c.get("host") in hosts.HOSTS else p["host"]
@@ -208,14 +279,15 @@ async def write_line(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any
     return new, "✨ Wrote the remark."
 
 
-async def write_choices(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any]) -> Tuple[List[str], str]:
+async def write_choices(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any], chunks: Any = None
+                        ) -> Tuple[List[str], str]:
     """✨ on one chunk (owner 2026-11-22: several to pick from, as the host lines work): (lines, note for the
     page). As many requests as the settings page's "lines per slot" (kobold.Kobold.per_slot); the builder
-    lists them under the remark and picks the first."""
+    lists them under the remark and picks the first. ``chunks``: the chunk's whole stack."""
     kob = getattr(poster, "kobold", None)
     if kob is None:
         return [], "KoboldCpp isn't set up (Settings → KoboldCpp)."
-    facts, why = await _ready(poster, p, week, c)
+    facts, why = await _ready(poster, p, week, c, chunks)
     if not facts:
         return [], why
     host = c.get("host") if c.get("host") in hosts.HOSTS else p["host"]
@@ -270,8 +342,9 @@ async def _write_all(poster: Any, dkey: str, tid: str, week: Any) -> None:
     store = poster.store
     # empty remarks, and chat chunks with nothing typed yet (their text field is "lines")
     field = lambda c: "lines" if c.get("type") == "chat" else "line"     # noqa: E731
+    # (host moments and the sign-off strip come last: their line sums up the picture)
     todo = [c["id"] for c in ((store.get(dkey) or {}).get("talls", {}).get(tid, {}).get("chunks") or [])
-            if (c.get("type") in LINE_TYPES or c.get("type") == "chat") and not c.get(field(c))]
+            if (c.get("type") in LINE_TYPES + SUMMARY_TYPES or c.get("type") == "chat") and not c.get(field(c))]
     state = "done"
     for cid in todo:
         p = store.get(dkey)
@@ -279,7 +352,9 @@ async def _write_all(poster: Any, dkey: str, tid: str, week: Any) -> None:
         if c is None or c.get(field(c)):
             continue
         try:
-            line, _ = await write_chat(poster, p, c) if c["type"] == "chat" else await write_line(poster, p, week, c)
+            q = as_tall(p, tid)                       # the picture's own host style speaks
+            line, _ = (await write_chat(poster, q, c) if c["type"] == "chat" else
+                       await write_line(poster, q, week, c, p["talls"][tid]["chunks"]))
         except Exception:
             log.exception("KoboldCpp remark failed")
             line = ""
@@ -303,6 +378,18 @@ async def _write_all(poster: Any, dkey: str, tid: str, week: Any) -> None:
 SEAMS = {"": "straight seams", "diagonal": "diagonal seams", "zig": "zigzag seams", "wave": "wavy seams"}
 
 
+def apply_seams(chunks: List[Dict[str, Any]], seams: str) -> None:
+    """Give every chunk of a stack but the last the same kind of bottom edge (a SEAMS key: "" straight,
+    "diagonal" slanting down and up in turn, "zig", "wave"), gently sloped. An unknown key changes nothing.
+    Used by the recipes and by the builder's Look card (flavrpromo/tall_page.py "seams")."""
+    if seams not in SEAMS:
+        return
+    for i, c in enumerate(chunks[:-1]):
+        c["cut"] = ("down", "up")[i % 2] if seams == "diagonal" else seams
+        if seams:
+            c["slope"] = 0
+
+
 def _pictures(title: str, subs: List[str], items: List[Dict[str, Any]], seams: Any) -> List[Tuple[str, List[Dict[str, Any]]]]:
     """Split ``items`` (stream / game chunks, no ids yet) over as few pictures as fit tall.MAX_H, in
     balanced groups, each with a header and, on the last one, a sign-off strip. Medium size first; small
@@ -320,9 +407,8 @@ def _pictures(title: str, subs: List[str], items: List[Dict[str, Any]], seams: A
         chunks = [{"type": "header", "size": 0, "title": title, "sub": sub}] + part
         if n == count - 1:
             chunks.append({"type": "footer", "size": 0, "host": "", "kind": "chibi_happy", "var": "", "line": ""})
-        seams = "diagonal" if seams is True else (seams if seams in SEAMS else "")      # True: the old yes / no
-        for i, c in enumerate(chunks[:-1] if seams else []):                           # gentle, never on the last chunk
-            c["cut"], c["slope"] = (("down", "up")[i % 2] if seams == "diagonal" else seams), 0
+        if seams:
+            apply_seams(chunks, "diagonal" if seams is True else seams)                # True: the old yes / no
         out.append((title if count == 1 else f"{title} ({n + 1} of {count})", tall.renumber(chunks)))
     return out
 
@@ -390,17 +476,18 @@ def next_tall_id(p: Dict[str, Any]) -> str:
     return "tall" + str(1 + max([int(k[4:]) for k in (p.get("talls") or {}) if k[4:].isdigit()] or [0]))
 
 
-def add_to_draft(p: Dict[str, Any], built: List[Tuple[str, List[Dict[str, Any]]]]) -> List[str]:
-    """Put built pictures into the draft as tall sections just before the outro; their ids."""
+def add_to_draft(p: Dict[str, Any], built: List[Tuple[str, List[Dict[str, Any]]]], on: bool = True) -> List[str]:
+    """Put built pictures into the draft as tall sections just before the outro; their ids. ``on``: are
+    they part of the article (False for a picture made on the Tall pictures page for a post of its own)."""
     ids = []
     for title, chunks in built:
         sid = next_tall_id(p)
         p.setdefault("talls", {})[sid] = {"chunks": chunks}
         at = next((i for i, s in enumerate(p["sections"]) if s["id"] == "outro"), len(p["sections"]))
-        p["sections"].insert(at, {"id": sid, "title": title, "on": True})
+        p["sections"].insert(at, {"id": sid, "title": title, "on": on})
         ids.append(sid)
     return ids
 
 
-__all__ = ["RECIPES", "SEAMS", "build", "fill", "people", "add_to_draft", "write_line", "write_choices", "start_lines", "game_rows", "drawing_context",
+__all__ = ["as_tall", "apply_seams", "stack_facts", "SUMMARY_TYPES", "RECIPES", "SEAMS", "build", "fill", "people", "add_to_draft", "write_line", "write_choices", "start_lines", "game_rows", "drawing_context",
            "chunk_facts", "stream_facts", "game_facts", "AI_STATES", "LINE_TYPES", "next_tall_id"]
