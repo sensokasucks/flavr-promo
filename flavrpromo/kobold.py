@@ -95,6 +95,14 @@ ASKS = {
     "game_talk": "Talk a little about this game in your own voice ({length}): what kind of game it is and why it is "
                  "fun to watch someone play it, using only what the facts say about it. Do not list who played it or "
                  "how many streams; that is already printed next to your line.",
+    # a tall picture's host moment and sign-off strip (owner 2026-11-22: "the sign off card has no way to generate
+    # lines with kobold. ideally, it could read the other chunks to make a summary"); the facts are what the
+    # picture's other chunks show (flavrpromo/recipes.py ``stack_facts``)
+    "tall_host": "Write one line that presents this picture in your own voice ({length}): say what it shows and "
+                 "what you make of it. The facts list what is in the picture; do not read them all out.",
+    "tall_signoff": "Write one sign-off line that closes this picture ({length}): sum up what it showed in a few "
+                    "words of your own, then say goodbye your way. The facts list what is in the picture; do not "
+                    "read them all out.",
     # banter (owner 2026-11-22: hosts answering each other). {name} = the host being answered, {line} = what
     # they said. "reply": the other host's answer on the opener card (``Kobold.replies``); "chat" opens a tall
     # picture's chat chunk and "chat_reply" is every turn after it (``Kobold.chat``).
@@ -114,6 +122,7 @@ _BRIEF = ("a few words", "one short sentence", "one or two sentences")
 _CHAT = ("a few words", "one short sentence, at most 16 words", "one or two short sentences, at most 28 words")
 LENGTHS = {"opener": _LONG, "desk_highlight": _LONG, "day": _LONG, "stream": _MID, "game": _MID,
            "stream_game": _LONG, "game_talk": _LONG,      # talking about a game needs a little more room
+           "tall_host": _MID, "tall_signoff": _MID,       # a tall picture's host moment / sign-off bubble
            "note": ("1 to 3 words", "2 to 5 words", "4 to 8 words"),
            "desk_nudge": _BRIEF, "desk_signoff": _BRIEF,
            "reply": ("a few words", "one short sentence, at most 20 words", "one or two sentences, at most 30 words"),
@@ -343,10 +352,20 @@ def fill_ask(ask: str, n: int, heading: str, length: str = "", name: str = "", l
 
 
 def tidy(line: str) -> str:
-    """A line without the stray marks some models put in front of it (owner 2026-11-22: remarks came out
-    as "]BREAKING NEWS: ..." and ". . . The way you handled ..."): brackets, loose commas and
-    leading dots are dropped from the start; a line of nothing but punctuation is "" (not a line)."""
-    line = re.sub(r"^[\[\]\s,;:.…]+", "", " ".join(str(line or "").split()))
+    """A line without the marks some models leave in it (owner 2026-11-22: remarks came out as
+    "]BREAKING NEWS: ...", ". . . The way you handled ..." and, when the model put its whole list inside
+    one pair of quotes, 'SPECTACULAR!!\\", \\"Aces High III looks stunning ...\\"'):
+      * the seams of a list written inside one line (quote, comma, quote, with or without backslashes)
+        become a space, a backslash in front of a quote goes, and a quote left without its partner at
+        either end is dropped;
+      * brackets, loose commas and leading dots are dropped from the start;
+      * a line of nothing but punctuation is "" (not a line)."""
+    line = " ".join(str(line or "").split())
+    line = re.sub(r'\\*"\s*,\s*\\*"', " ", line)        # ...!!\", \"Aces... = two items of a list in one line
+    line = re.sub(r'\\+(?=["\']|\s|$)', "", line)          # \" → ", and a backslash left at the end of an item
+    line = re.sub(r"^[\[\]\s,;:.…]+", "", line)
+    if line.count('"') % 2:                              # one quote too many: the end of the model's own list
+        line = line[:-1].rstrip() if line.endswith('"') else line[1:].lstrip() if line.startswith('"') else line
     return line if re.sub(r"[\s!-/:-@\[-`{-~…]", "", line) else ""      # only punctuation left = nothing said
 
 

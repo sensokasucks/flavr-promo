@@ -42,7 +42,8 @@ from typing import Any, Tuple
 
 # (group, ((url, label), ...)): keep each url in step with that page's add_routes.
 NAV: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = (
-    ("📰 Articles", (("/settings/article", "📰 Article editor"), ("/hosts/pick", "🎙️ Line picker"))),
+    ("📰 Articles", (("/settings/article", "📰 Article editor"), ("/settings/talls", "🧱 Tall pictures"),
+                    ("/hosts/pick", "🎙️ Line picker"))),
     ("🎭 Hosts", (("/settings/pictures", "🖼️ Pictures"), ("/settings/lines", "💬 Host lines"),
                  ("/settings/cards", "🧾 Character cards"))),
     ("⚙️ Bot", (("/settings", "⚙️ Settings"), ("/settings/commands", "⌨️ Commands"))),
@@ -284,11 +285,13 @@ def _e(s: Any) -> str:
     return html.escape(str(s if s is not None else ""))
 
 
-def frame(title: str, heading: str, body: str, saved: str = "", style: str = "") -> str:
+def frame(title: str, heading: str, body: str, saved: str = "", style: str = "", tab: str = "") -> str:
     """A whole page in the panel: the menu of groups on the left, the tabs of ``heading``'s group on
     top (``heading`` = a label from NAV; an unknown one gets no tab row), then the page ``body``.
-    ``saved``: the note shown after a save. ``style``: extra CSS for that page."""
-    group = next((g for g, pages in NAV if any(n == heading for _, n in pages)), "")
+    ``saved``: the note shown after a save. ``style``: extra CSS for that page. ``tab``: for a page that
+    isn't in NAV itself, the NAV label it belongs under (the tall picture builder under "Tall pictures"):
+    that group's tabs show, with the tab as a link back."""
+    group = next((g for g, pages in NAV if any(n == (tab or heading) for _, n in pages)), "")
     side = "".join(f'<a href="{pages[0][0]}"{" class=on" if g == group else ""}>{_e(g)}</a>' for g, pages in NAV)
     pages = next((pg for g, pg in NAV if g == group), ())
     tabs = ""

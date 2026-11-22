@@ -3,6 +3,11 @@ The tall picture builder: http://<this PC>:3871/settings/tall?d=<article draft>&
 (owner 2026-11-21: build the image piece by piece, each chunk set with menus, chunks and whole
 stacks saved to use again). Chunk types and the drawing are in flavrpromo/tall.py.
 
+The list page http://<this PC>:3871/settings/talls ("🧱 Tall pictures" in the panel's menu; owner 2026-11-22:
+"jump right to a stack editor directly instead of having to go through the menus to make an article") shows a
+week's tall pictures and makes a new one from a stack or a recipe, then opens it here. A picture made there
+is NOT ticked into the article (its section is off) until the owner ticks it in the article editor.
+
 A tall picture belongs to an article draft (flavrpromo/article_editor.py): p["talls"][tid] =
 {"chunks": [...]}, and the draft has a section with that id ("tall1", "tall2" ...) where the picture
 sits in the article. The editor's "+ Add a tall picture" makes one from a built-in stack; this page
@@ -25,6 +30,14 @@ edits it:
   * what a remark is about (owner 2026-11-22: "a good way to get the host to talk a little about the game"):
     "The remark is about" (the stream, or the game itself) and "Tell the host" (a few words to work in);
     flavrpromo/recipes.py ``ask_kind`` / ``chunk_facts`` read them (chunk keys ``about`` and ``hint``),
+  * host moments and the sign-off strip have a ✨ too (owner 2026-11-22): KoboldCpp reads the picture's other
+    chunks and writes a few lines that sum it up (recipes.stack_facts), with the same "Tell the host" box,
+  * a Look card for the whole stack (owner 2026-11-22: "a way to change the stack style and color scheme"):
+    its colour scheme (the picture's own entry in the draft's p["schemes"], flavrpromo/schemes.py), its host
+    style (p["talls"][tid]["host"]: whose lettering, colours and pictures; recipes.as_tall) and one kind of
+    bottom edge for every chunk at once (recipes.apply_seams),
+  * a stream chunk links to the stream itself (VOD, live page or planned page) so it can be checked,
+  * "↻ Redraw" under the preview draws the picture again without changing anything,
   * the page saves itself and redraws the preview as menus change (flavrpromo/panel.py SCRIPT, "data-live");
     each chunk is a folding card whose bar can be dragged to reorder (↑ ↓ still work), with a colour menu
     for its background (tall.BAND_COLOURS or any colour),
@@ -46,12 +59,13 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from . import article_editor, gameinfo, games, host_picker, hosts, kobold, recipes, tall
+from . import article_editor, gameinfo, games, groups, host_picker, hosts, kobold, recipes, schemes, tall
 from .panel import _e, frame
 
 CHUNKS_KEY, TEMPLATES_KEY = tall.CHUNKS_KEY, tall.TEMPLATES_KEY
 CHAT_MAX = 900              # characters kept of a chat chunk's rows (up to 5 lines; KoboldCpp writes 4)
 NAME_MAX = 40
+LIST_TAB = "🧱 Tall pictures"       # the list page's label in flavrpromo/panel.py NAV (the builder shows under its tab)
 KNOWN_MAX = 400             # known games offered as suggestions in the game box (a <datalist>)
 TITLE_PARTS = 3             # parts of a stream's title searched on IGDB when the game box is empty (one request each)
 
@@ -90,7 +104,7 @@ def _picture_menus(c: Dict[str, Any], p: Dict[str, Any]) -> str:
     vars_ = [("", "auto (the draft's pick)")] + [
         (v, "main" if v == "main" else f"built-in {v[1:]}" if v.startswith("b") else f"#{v}")
         for v, _ in hosts.variants(key, c.get("kind") or "happy")]
-    hopts = [("", f"The article's host ({hosts.HOSTS[p['host']]['name']})")] + [(k, h["name"]) for k, h in hosts.HOSTS.items()]
+    hopts = [("", f"The stack's host ({hosts.HOSTS[p['host']]['name']})")] + [(k, h["name"]) for k, h in hosts.HOSTS.items()]
     return (f'<label>Host <select name="{c["id"]}__host">{_opts(hopts, c.get("host") or "")}</select></label> '
             f'<label>Pose <select name="{c["id"]}__kind">{_opts(kinds, c.get("kind"))}</select></label> '
             f'<label>Which picture <select name="{c["id"]}__var">{_opts(vars_, c.get("var") or "")}</select></label>'
@@ -105,7 +119,34 @@ def _choices(c: Dict[str, Any]) -> str:
         return ""
     rows = "".join(f'<label class=tick><input type=radio name="{c["id"]}__choice" value="{i}"'
                    f'{" checked" if x == c.get("line") else ""}> {_e(x)}</label>' for i, x in enumerate(got))
-    return f'<div class=choices><small>✨ KoboldCpp wrote these; pick one (or type your own above):</small>{rows}</div>'
+    # "chosen": which choice the box held when the page was drawn. The radio stays ticked in the browser after
+    # the box is edited by hand, so ``_apply`` only takes a radio that differs from this (else every later
+    # save put the old choice back over the owner's own words: owner 2026-11-22 "if i edit the line manually,
+    # it doesn't save").
+    chosen = next((str(i) for i, x in enumerate(got) if x == c.get("line")), "")
+    return (f'<div class=choices><input type=hidden name="{c["id"]}__chosen" value="{chosen}">'
+            f'<small>✨ KoboldCpp wrote these; pick one (or type your own above):</small>{rows}</div>')
+
+
+def _hint_field(c: Dict[str, Any]) -> str:
+    """"Tell the host": a few words of the owner's that ✨ works into the line (chunk key ``hint``)."""
+    return (f'<label class=hint>Tell the host <input name="{c["id"]}__hint" value="{_e(c.get("hint"))}" '
+            f'maxlength={recipes.HINT_MAX} placeholder="optional, like “they finally beat the boss”"></label>')
+
+
+def _watch_links(t: Any) -> str:
+    """Links to the stream itself (owner 2026-11-22: "give me VOD links so i can double check the streams
+    myself"): the tile's main link (the VOD of a past stream, the live page, a planned stream's page) and
+    each platform's own link where it differs. Only http(s) addresses; they open in a new tab."""
+    main = {"past": "VOD", "live": "live now"}.get(t.kind, "planned stream")
+    seen, out = set(), []
+    for label, url in [(main, t.url)] + [(plat, u) for plat, u in (t.links or {}).items()]:
+        url = str(url or "")
+        if url.startswith(("https://", "http://")) and url not in seen:
+            seen.add(url)
+            out.append(f'<a href="{_e(url)}" target=_blank rel=noopener>{_e(label)} ↗</a>')
+    return ('<small class=watch>Check the stream: ' + " · ".join(out) + '</small>' if out else
+            '<small class=watch>No link is saved for this stream.</small>')
 
 
 def _figure_controls(c: Dict[str, Any], p: Dict[str, Any]) -> str:
@@ -160,7 +201,7 @@ def _game_box(c: Dict[str, Any], week: Any, store: Any, igdb: bool) -> str:
                  + (f'<small>{_e(gameinfo._cut(g.get("summary"), 140))}</small>' if g.get("summary") else "") + '</button>')
     found = f'<div class=found><small>IGDB found these; press the right one:</small>{rows}</div>' if rows else ""
     search = (f'<button name=action value="findgame:{cid}" class=alt>🔎 Search IGDB</button>' if igdb else "")
-    return (f'<div class=gamebox data-nolive><span class=gamehave>Game: {have}</span>'
+    return (f'<div class=gamebox data-nolive>{_watch_links(t)}<span class=gamehave>Game: {have}</span>'
             f'<p><input name="{cid}__gamename" list=known-games value="{_e(c.get("found_q") if rows else t.game)}" placeholder="type the game\'s name" '
             f'maxlength=100 data-enter="setgame:{cid}" autocomplete=off> '
             f'<button name=action value="setgame:{cid}" class=alt>Set game</button> {search}</p>'
@@ -178,7 +219,12 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str], s
     if t in ("host", "footer"):
         side = (f'<label>Side <select name="{cid}__side">{_opts(tall.SIDES.items(), c.get("side") or "left")}</select></label>'
                 if t == "host" else "")
-        return _picture_menus(c, p) + side + _line_field(c, "line", lines, "Line from the article")
+        what = "sign-off" if t == "footer" else "line"
+        return (_picture_menus(c, p) + side + _line_field(c, "line", lines, "Line from the article") + _choices(c)
+                + f'<p class=steer>{_hint_field(c)}</p>'
+                f'<p><button name=action value="ai:{cid}" class=alt>✨ Write the {what}</button> '
+                f'<small>(KoboldCpp reads the other chunks of this picture and writes a few that sum it up; '
+                f'the page waits for it)</small></p>')
     if t == "hero":
         return (f'<label>Small word on top <input name="{cid}__top" value="{_e(c.get("top"))}"></label>'
                 f'<label>Big title <input name="{cid}__title" value="{_e(c.get("title"))}" placeholder="(the host\'s first name)"></label>'
@@ -186,7 +232,7 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str], s
                 f'<label>Tagline <input name="{cid}__tag" value="{_e(c.get("tag"))}" placeholder="(the date range)"></label>'
                 + _picture_menus(c, p))
     if t == "chat":
-        hopts = [("", "The article's host")] + [(k, h["name"]) for k, h in hosts.HOSTS.items()]
+        hopts = [("", "The stack's host")] + [(k, h["name"]) for k, h in hosts.HOSTS.items()]
         oopts = [("", "The other host")] + [(k, h["name"]) for k, h in hosts.HOSTS.items()]
         return (f'<label>First speaker <select name="{cid}__host">{_opts(hopts, c.get("host") or "")}</select></label> '
                 f'<label>Answers <select name="{cid}__other">{_opts(oopts, c.get("other") or "")}</select></label>'
@@ -211,9 +257,7 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str], s
         # what ✨ writes about: a reaction, or the game itself; plus a few words of the owner's to work in
         about = recipes.ABOUT if t == "stream" else recipes.ABOUT_GAME
         steer = (f'<p class=steer><label>The remark is about <select name="{cid}__about">'
-                 f'{_opts(about.items(), c.get("about") or "")}</select></label> '
-                 f'<label class=hint>Tell the host <input name="{cid}__hint" value="{_e(c.get("hint"))}" maxlength={recipes.HINT_MAX} '
-                 f'placeholder="optional, like “they finally beat the boss”"></label></p>')
+                 f'{_opts(about.items(), c.get("about") or "")}</select></label> {_hint_field(c)}</p>')
         return (pick + f'<p class=ticks><input type=hidden name="{cid}__showed" value=1>{ticks}</p>' + more
                 + _line_field(c, "line", lines, "Remark") + _choices(c) + steer
                 + f'<p><button name=action value="ai:{cid}" class=alt>✨ Write the remark</button> '
@@ -253,6 +297,7 @@ def _band_menu(c: Dict[str, Any]) -> str:
 def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: str = "", igdb: bool = False) -> str:
     """The builder page. ``igdb``: can IGDB be searched (poster.game_info is ready)? Shows the game box's
     search button."""
+    whole, p = p, recipes.as_tall(p, tid)         # the chunks see the picture's own host style; ``whole`` = the draft
     chunks = p["talls"][tid]["chunks"]
     used = tall.total(chunks)
     over = used > tall.MAX_H
@@ -315,7 +360,8 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
     pic = f'/settings/tall/picture?d={quote(dkey)}&t={tid}&v={article_editor.stamp(p, tid)}'
     # data-live: the form saves itself and the parts marked data-swap are refreshed (flavrpromo/panel.py SCRIPT);
     # the chunk list is a data-draglist: dropping a card posts action=order with the ids in the hidden "order"
-    body = (f'<p><a href="{back}">← back to the article</a></p>'
+    every = f'/settings/talls?group={quote(p["group"])}&which={quote(p["which"])}'
+    body = (f'<p><a href="{every}">← all tall pictures</a> · <a href="{back}">the article it belongs to</a></p>'
             f'<form method=post action=/settings/tall data-live data-foldkey="{_e(dkey)}:{_e(tid)}">'
             f'<input type=hidden name=d value="{_e(dkey)}"><input type=hidden name=t value="{_e(tid)}">'
             f'<input type=hidden name=order value="">'
@@ -323,7 +369,9 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
             f'<p><button name=action value=save>Save and preview</button> <span class=livestatus>Changes save and '
             f'redraw on their own.</span> <button type=button class=link data-foldall=close>Fold all</button><button type=button class=link data-foldall=open>Open all</button></p>'
             f'<div class=prev data-swap=always data-swap-id=prev><a href="{pic}" target=_blank title="open full size">'
-            f'<img src="{pic}" alt="preview"></a></div>'
+            f'<img src="{pic}" alt="preview"></a><p class=prevtools><button type=button class=link data-redraw>↻ Redraw</button> '
+            f'<a href="{pic}" download="{_e(tid)}.png">⬇ Save the picture</a></p></div>'
+            f'<div data-swap=always data-swap-id=look>{_look_card(whole, tid)}</div>'
             f'<div class=chunks data-swap=rebuild data-swap-id=chunks data-draglist>{"".join(blocks)}</div>{tools}'
             f'<datalist id=known-games>{known}</datalist></form>'
             # ✨ on one chunk waits for KoboldCpp: show it's working instead of a page that looks stuck
@@ -333,7 +381,10 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
             # Enter in a box with data-enter presses that box's own button (the game box: "Set game"), not Save
             "document.querySelector('form[data-live]').addEventListener('keydown',e=>{const t=e.target;"
             "if(e.key==='Enter'&&t.dataset&&t.dataset.enter){e.preventDefault();"
-            "const b=t.form.querySelector('button[value=\"'+t.dataset.enter+'\"]');if(b)b.click()}});</script>")
+            "const b=t.form.querySelector('button[value=\"'+t.dataset.enter+'\"]');if(b)b.click()}});"
+            # ↻ Redraw: fetch the preview again (a new address, so nothing cached is shown)
+            "document.addEventListener('click',e=>{const b=e.target.closest('[data-redraw]');if(!b)return;"
+            "const i=document.querySelector('.prev img');i.src=i.src.replace(/&r=\\d+$/,'')+'&r='+Date.now()});</script>")
     style = (".meter{height:14px;background:#0e0f14;border-radius:8px;overflow:hidden}.meter div{height:100%;background:#2ae0d4}"
              ".meter.over div{background:#e5312f}.bad{color:#ff7a7a;font-weight:bold}"
              ".prev img{width:100%;border-radius:8px;border:2px solid #3d2a3b;display:block;margin:10px 0}.prev{max-width:520px}"
@@ -345,9 +396,35 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
              ".gamebox small{display:block}.gamehave small{display:inline}.gamebox input:not([type]){width:300px;max-width:55%}"
              ".found .pick{display:block;width:100%;text-align:left;margin:4px 0;font-weight:400}.found .pick span{opacity:.8}"
              ".steer label.hint{display:block}.steer input:not([type]){width:min(520px,100%)}"
+             ".gamebox small.watch{margin-bottom:6px}.prevtools{margin:0 0 10px}.prevtools a{margin-left:14px}"
+             ".lookcard label{display:inline-block;margin:6px 14px 6px 0}.lookcard select{width:auto}.lookcard small{display:block}"
+             ".sw{display:inline-flex;gap:3px;vertical-align:middle;margin-left:6px}.sw i{width:14px;height:14px;border-radius:50%;"
+             "border:1px solid #0006;display:inline-block}"
              "@media(min-width:1100px){.prev{position:sticky;top:8px;float:right;margin-left:20px;width:420px;"
-             "max-height:calc(100vh - 16px);overflow:auto}form .chunks,form .tools{margin-right:450px}}")
-    return frame("Tall picture", "🧱 Tall picture builder", body, saved, style=style)
+             "max-height:calc(100vh - 16px);overflow:auto}form .chunks,form .tools,form [data-swap-id=look]{margin-right:450px}}")
+    return frame("Tall picture", "🧱 Tall picture builder", body, saved, style=style, tab=LIST_TAB)
+
+
+def _look_card(p: Dict[str, Any], tid: str) -> str:
+    """The Look card: what holds for the whole stack (owner 2026-11-22: "a way to change the stack style and
+    color scheme would be great for the stack editor"). ``p`` = the draft itself (not ``recipes.as_tall``).
+      Colours      this picture's own colour scheme (name "scheme_<part>", the same entry the article editor's
+                   menu for this picture sets; article_editor.scheme_part)
+      Host style   whose lettering, colours and pictures the stack is drawn in (name "stack_host"; "" = the
+                   article's host); chunks set to "the article's host" follow it
+      Bottom edges one kind of seam for every chunk at once (name "stack_seams" + the "seams" button)"""
+    q = recipes.as_tall(p, tid)
+    part = article_editor.scheme_part(p, tid)
+    hopts = [("", f"The article's host ({hosts.HOSTS[p['host']]['name']})")] + [(k, h["name"]) for k, h in hosts.HOSTS.items()]
+    seams = [(k, v.replace(" seams", "")) for k, v in recipes.SEAMS.items()]
+    return (f'<details class="card lookcard" id=look open><summary><b>🎨 Look of the whole stack</b> '
+            f'<span class=what>colours, host style, bottom edges</span></summary><div class=inner>'
+            f'{article_editor._scheme_menu(q, part)} '
+            f'<label>Host style <select name=stack_host>{_opts(hopts, p["talls"][tid].get("host") or "")}</select></label> '
+            f'<span data-nolive><label>Bottom edges <select name=stack_seams>{_opts(seams, "")}</select></label>'
+            f'<button name=action value=seams class=alt>Set every edge</button></span>'
+            f'<small>Each chunk still has its own colour and bottom edge below. For another layout, use '
+            f'“Start from this stack” at the bottom of the page.</small></div></details>')
 
 
 def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
@@ -377,8 +454,10 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
             c["other"] = get("other") if get("other") in hosts.HOSTS else ""
         if get("lines") is not None:
             c["lines"] = "\n".join(" ".join(x.split())[:kobold.MAX_CHARS] for x in str(get("lines")).splitlines() if x.strip())[:CHAT_MAX]
-    if t == "header":
-        c["title"], c["sub"] = " ".join(str(get("title") or "").split())[:120], " ".join(str(get("sub") or "").split())[:120]
+    if t == "header":                           # only boxes that were sent: a post without them keeps the title
+        for f in ("title", "sub"):
+            if get(f) is not None:
+                c[f] = " ".join(str(get(f)).split())[:120]
     if t in ("host", "footer", "hero"):
         if get("host") is not None:
             c["host"] = get("host") if get("host") in hosts.HOSTS else ""
@@ -415,11 +494,11 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
         c["ref"] = ref
     if t == "game" and get("game") is not None:
         c["game"] = get("game") if get("game") in {r["game"] for r in recipes.game_rows(p.get("facts") or {}, week)} else ""
+    if t in recipes.LINE_TYPES + recipes.SUMMARY_TYPES and get("hint") is not None:     # the owner's few words for ✨
+        c["hint"] = " ".join(str(get("hint")).split())[:recipes.HINT_MAX]
     if t in recipes.LINE_TYPES:
-        if get("about") is not None:            # what ✨ writes about (recipes.ask_kind), and the owner's few words
+        if get("about") is not None:            # what ✨ writes about (recipes.ask_kind)
             c["about"] = "game" if get("about") == "game" else ""
-        if get("hint") is not None:
-            c["hint"] = " ".join(str(get("hint")).split())[:recipes.HINT_MAX]
         if get("showed"):                       # the tick boxes were on the page (a partial post leaves them be)
             c["show"] = [k for k in tall.SHOW[t] if get(f"show_{k}")]
         if get("host") is not None:
@@ -438,10 +517,88 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
                 c[field] = str(pick)[:kobold.MAX_CHARS]
             elif get(field) is not None:
                 c[field] = " ".join(str(get(field)).split())[:kobold.MAX_CHARS]
-    # a ✨ choice picked (radio): it goes in the Remark box, unless the box itself was edited in the same save
+    # a ✨ choice picked (radio): it goes in the box, unless the box itself was edited in the same save. Only a
+    # radio that CHANGED counts ("chosen" = the one the page was drawn with, ``_choices``): the old one stays
+    # ticked in the browser while the owner types their own words, and must not come back over them.
     got, n = c.get("choices") or [], str(get("choice") or "")
-    if n.isdigit() and int(n) < len(got) and got[int(n)] != before and c.get("line") == before:
+    if (n.isdigit() and int(n) < len(got) and n != str(get("chosen") or "") and got[int(n)] != before
+            and c.get("line") == before):
         c["line"] = got[int(n)]
+
+
+def _tidy_old(chunks: List[Dict[str, Any]]) -> None:
+    """Clean the lines KoboldCpp wrote before kobold.tidy knew a mark (a "]" in front, a whole list inside
+    one line): each chunk's ✨ choices, and its line when the line is one of them. The owner's own words
+    (a line that is none of the choices) are never touched. Called when a tall picture is loaded."""
+    for c in chunks:
+        old = [str(x) for x in c.get("choices") or []]
+        new = [kobold.tidy(x) or x for x in old]
+        if new != old:
+            if c.get("line") in old:
+                c["line"] = new[old.index(c["line"])]
+            c["choices"] = new
+
+
+def talls_page(poster: Any, group: str, which: str, p: Any, week: Any, saved: str = "") -> str:
+    """The list page /settings/talls: pick a group and a week, see that week's tall pictures (each with
+    "Edit the chunks", save and remove) and make a new one from a stack or a recipe. ``p``: the week's
+    article draft, None when there is none yet (making a picture makes it)."""
+    store = poster.store
+    dkey = article_editor.draft_key(group, which)
+    gopts = _opts([(g, groups.name(g)) for g in groups.keys()], group)
+    wopts = _opts([(w, t) for w, t, _, _ in article_editor.WHICH], which)
+    picker = (f'<form method=get action=/settings/talls class=row><label>Group <select name=group>{gopts}</select></label>'
+              f'<label>Week <select name=which>{wopts}</select></label><button>Open</button></form>')
+    cards = []
+    talls = (p or {}).get("talls") or {}
+    titles = {s["id"]: s for s in (p or {}).get("sections") or []}
+    for tid in sorted(talls, key=lambda k: int(k[4:]) if k[4:].isdigit() else 0):
+        chunks = talls[tid].get("chunks") or []
+        day = talls[tid].get("day")
+        sec = titles.get(tid)
+        if day is not None:                       # made for a day of the article (article_editor.ensure_day_talls)
+            title, where = f"{week.date_of(int(day)).strftime('%A')}'s day picture", "the article's picture for that day"
+        else:
+            title = (sec or {}).get("title") or tid
+            where = "in the article" if (sec or {}).get("on") else "not in the article (tick it in the article editor to add it)"
+        pic = f'/settings/tall/picture?d={quote(dkey)}&t={tid}&v={article_editor.stamp(p, tid)}'
+        edit = f'/settings/tall?d={quote(dkey)}&t={tid}'
+        remove = ("" if day is not None else
+                  f' <button name=action value="remove:{tid}" class=alt>Remove</button>')
+        cards.append(
+            f'<div class=tallcard><a href="{edit}"><img src="{pic}" alt="" loading=lazy></a><div><b>{_e(title)}</b>'
+            f'<small>{len(chunks)} chunks · {tall.total(chunks)} px tall · {_e(where)}</small>'
+            f'<p><a href="{edit}"><b>✏️ Edit the chunks</b></a> <a href="{pic}" download="{_e(tid)}.png">⬇ Save the picture</a>'
+            f'{remove}</p></div></div>')
+    have = "".join(cards) or "<p><small>No tall pictures for this week yet. Make one below.</small></p>"
+    article = f'/settings/article?group={quote(group)}&which={quote(which)}'
+    body = (f'{picker}<form method=post action=/settings/talls>'
+            f'<input type=hidden name=group value="{_e(group)}"><input type=hidden name=which value="{_e(which)}">'
+            f'<section><h2>This week\'s tall pictures</h2>{have}</section>'
+            f'<section><h2>Make a new one</h2><p class=help>It opens in the builder straight away. A picture made here '
+            f'is for a post of its own: it stays out of <a href="{article}">the article</a> until you tick it there.</p>'
+            f'{article_editor._recipe_row(week, store)}</section></form>')
+    style = (".tallcard{display:flex;gap:16px;align-items:flex-start;border:1px solid #3d2a3b;border-radius:10px;"
+             "padding:10px;margin:10px 0}.tallcard img{width:150px;max-height:200px;object-fit:cover;object-position:top;"
+             "border-radius:6px;display:block}.tallcard small{display:block;margin:4px 0}.tallcard a{margin-right:12px}"
+             ".row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}.row label{margin:0}.row select{width:auto}"
+             ".recipe select,.recipe input{width:auto}.recipe label{display:inline-block;margin:0 6px}")
+    return frame("Tall pictures", LIST_TAB, body, saved, style=style)
+
+
+def _apply_look(p: Dict[str, Any], tid: str, form: Any) -> None:
+    """Take the Look card's menus from the posted form (``_look_card``): the stack's host style and this
+    picture's colour scheme. Unknown values are ignored; a form without them changes nothing."""
+    if "stack_host" in form:
+        v = str(form.get("stack_host") or "")
+        p["talls"][tid]["host"] = v if v in hosts.HOSTS and v != p["host"] else ""
+    part = article_editor.scheme_part(p, tid)
+    if f"scheme_{part}" in form:                # "" = the article's choice, "host" = the host's own colours
+        v, host = str(form.get(f"scheme_{part}") or ""), recipes.as_tall(p, tid)["host"]
+        if v == "host" or (schemes.get(v) and v != host):
+            p.setdefault("schemes", {})[part] = v
+        else:
+            p.setdefault("schemes", {}).pop(part, None)
 
 
 def _set_game(store: Any, t: Any, game: str) -> str:
@@ -479,6 +636,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         if not p or tid not in (p.get("talls") or {}):
             raise web.HTTPNotFound(text="That tall picture isn't in a draft any more.")
         article_editor.migrate(p)
+        _tidy_old(p["talls"][tid].get("chunks") or [])
         return p
 
     def _back(dkey: str, tid: str, note: str, anchor: str = "") -> web.HTTPSeeOther:
@@ -498,6 +656,9 @@ def add_routes(app: web.Application, poster: Any) -> None:
         p = _load(dkey, tid)
         week, _ = await article_editor._article(poster, p)
         chunks: List[Dict[str, Any]] = p["talls"][tid]["chunks"]
+        whole = p                               # the draft itself: what is saved
+        _apply_look(whole, tid, form)           # the Look card first: the chunks' menus depend on the host style
+        p = recipes.as_tall(whole, tid)         # ... and this is the draft as the picture sees it (its own host)
         for c in chunks:
             _apply(c, form, p, week)
         verb, _, cid = str(form.get("action") or "save").partition(":")
@@ -565,8 +726,13 @@ def add_routes(app: web.Application, poster: Any) -> None:
             if text:
                 chunks[i]["lines"] = text[:CHAT_MAX]
             anchor = cid
-        elif verb == "ai" and i >= 0:           # ✨ one chunk's remark: a few to pick from (the page waits)
-            got, note = await recipes.write_choices(poster, p, week, chunks[i])
+        elif verb == "seams":                   # the Look card: one kind of bottom edge for every chunk
+            recipes.apply_seams(chunks, str(form.get("stack_seams") or ""))
+            note = "Set every bottom edge."
+        elif verb == "ai" and i >= 0 and chunks[i]["type"] not in recipes.LINE_TYPES + recipes.SUMMARY_TYPES:
+            note = "That kind of chunk has no ✨."
+        elif verb == "ai" and i >= 0:           # ✨ one chunk's remark / line: a few to pick from (the page waits)
+            got, note = await recipes.write_choices(poster, p, week, chunks[i], chunks)
             if got:
                 chunks[i]["choices"], chunks[i]["line"] = got, got[0]
             anchor = cid
@@ -601,7 +767,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
                     c["found"], c["found_q"] = rows, typed
                     note = f"IGDB found {len(rows)} for {what}. Press the right one."
         elif verb == "aiall":
-            store.put(dkey, p)                  # the posted menus first, then the writer re-reads the draft
+            store.put(dkey, whole)              # the posted menus first, then the writer re-reads the draft
             note = ("KoboldCpp is writing the empty remarks; refresh in a minute or two."
                     if recipes.start_lines(poster, dkey, tid, week) else
                     "KoboldCpp isn't set up." if getattr(poster, "kobold", None) is None else
@@ -615,8 +781,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
             elif kind == "t" and stacks.pop(name, None) is not None:
                 store.put(TEMPLATES_KEY, stacks)
                 note = f"Deleted the saved stack “{name}”."
-        p["saved_at"] = time.time()
-        store.put(dkey, p)
+        whole["saved_at"] = time.time()
+        store.put(dkey, whole)
         raise _back(dkey, tid, note, anchor)
 
     async def picture(request: web.Request) -> web.Response:
@@ -627,6 +793,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
             raise web.HTTPServiceUnavailable(text="No Chromium for pictures.")
         week, _ = await article_editor._article(poster, p)
         await poster.images.fetch_all(week)
+        p = recipes.as_tall(p, tid)             # the picture's own host style, when it has one
         f = p.get("facts") or {}
         chunks = p["talls"][tid]["chunks"]
         ctx = {"host": p["host"], "week": week, "img": poster.images.data_url, "facts": f, "notes": p.get("notes"),
@@ -636,9 +803,68 @@ def add_routes(app: web.Application, poster: Any) -> None:
         png = await poster.shooter.png(tall.document(chunks, ctx), size=(tall.WIDTH, max(1, tall.total(chunks))))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
 
+    def _which_week(q: Any) -> Any:
+        """(group, which) from a query or form, as the article editor reads them."""
+        return (groups.find(str(q.get("group") or "")) or "flavr",
+                article_editor._which(str(q.get("which") or ""))[0])
+
+    async def talls_get(request: web.Request) -> web.Response:
+        """The list page: this week's tall pictures and "make a new one" (``talls_page``)."""
+        group, which = _which_week(request.query)
+        p = store.get(article_editor.draft_key(group, which))
+        if p:
+            article_editor.migrate(p)
+        _, _name, label, off = article_editor._which(which)
+        week, _ = await article_editor._article(poster, p or {"group": group, "label": label, "off": off})
+        return web.Response(text=talls_page(poster, group, which, p, week, request.query.get("saved", "")),
+                            content_type="text/html")
+
+    async def talls_post(request: web.Request) -> web.Response:
+        """Make a tall picture for a week without going through the article editor (the week's article
+        draft is made quietly when there is none: a tall picture lives in it), or remove one. A new
+        picture's section is off, so it is not part of the article. Then straight to the builder."""
+        form = await request.post()
+        group, which = _which_week(form)
+        dkey = article_editor.draft_key(group, which)
+        p = store.get(dkey) or await article_editor.new_draft(poster, group, which)
+        article_editor.migrate(p)
+        week, _ = await article_editor._article(poster, p)
+        verb, _, tid = str(form.get("action") or "").partition(":")
+        here = f"/settings/talls?group={quote(group)}&which={quote(which)}&saved="
+        ids: List[str] = []
+        if verb == "remove" and tid in p["talls"] and p["talls"][tid].get("day") is None:
+            p["talls"].pop(tid)
+            p["sections"] = [s for s in p["sections"] if s["id"] != tid]
+            (p.get("schemes") or {}).pop(tid, None)
+            store.put(dkey, p)
+            raise web.HTTPSeeOther(here + quote("Removed that tall picture."))
+        if verb == "add_tall":                  # from a built-in or saved stack, this week's streams / games filled in
+            kind, _, name = str(form.get("tall_stack") or "b:Week overview").partition(":")
+            src = (tall.BUILTIN.get(name) if kind == "b" else (store.get(TEMPLATES_KEY) or {}).get(name)) \
+                or tall.BUILTIN["Week overview"]
+            chunks = tall.renumber(src)
+            recipes.fill(chunks, p, week)
+            ids = recipes.add_to_draft(p, [(name or "Tall picture", chunks)], on=False)
+        elif verb == "add_recipe":              # a whole picture (or several) from the week: flavrpromo/recipes.py
+            recipe = str(form.get("recipe") or "")
+            arg = str(form.get("recipe_day") if recipe == "day" else form.get("recipe_person") or "")
+            built, err = recipes.build(recipe, p, week, arg, str(form.get("recipe_seams") or ""))
+            if err:
+                raise web.HTTPSeeOther(here + quote(err))
+            ids = recipes.add_to_draft(p, built, on=False)
+        if not ids:
+            raise web.HTTPSeeOther(here + quote("Pick what to make."))
+        p["saved_at"] = time.time()
+        store.put(dkey, p)
+        note = ("Made it. Build it here; it is saved as you go." if len(ids) == 1 else
+                f"Made {len(ids)} pictures (it was too much for one). This is the first; the others are on the Tall pictures page.")
+        raise _back(dkey, ids[0], note)
+
+    app.router.add_get("/settings/talls", talls_get)
+    app.router.add_post("/settings/talls", talls_post)
     app.router.add_get("/settings/tall", get)
     app.router.add_post("/settings/tall", post)
     app.router.add_get("/settings/tall/picture", picture)
 
 
-__all__ = ["add_routes", "page", "line_options"]
+__all__ = ["add_routes", "page", "talls_page", "line_options"]

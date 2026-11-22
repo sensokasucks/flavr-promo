@@ -413,8 +413,8 @@ def stamp(p: Dict[str, Any], part: str = "") -> int:
     mine: Any = None
     if part in HOST_SECTIONS:
         mine = [host_picker.chosen(p, x) for x in _slots_of(part, p)]
-    elif part in (p.get("talls") or {}):
-        mine = p["talls"][part].get("chunks")
+    elif part in (p.get("talls") or {}):          # its chunks and its own host style (the builder's Look card)
+        mine = [p["talls"][part].get("chunks"), p["talls"][part].get("host") or ""]
     elif part:
         mine = host_picker.chosen(p, part)
     return zlib.crc32(json.dumps([base, mine], sort_keys=True, default=str).encode())
