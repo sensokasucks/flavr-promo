@@ -499,7 +499,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
         chunks = p["talls"][tid]["chunks"]
         ctx = {"host": p["host"], "week": week, "img": poster.images.data_url, "facts": f, "notes": p.get("notes"),
                "heading": host_picker.heading_of(p, "Week in Review"), "range": f.get("range") or "",
-               "seed": p.get("seed"), "pins": p.get("pins"), **recipes.drawing_context(store, p, week, chunks)}
+               "seed": p.get("seed"), "pins": p.get("pins"), "scheme": article_editor.scheme_for(p, tid),
+               **recipes.drawing_context(store, p, week, chunks)}
         png = await poster.shooter.png(tall.document(chunks, ctx), size=(tall.WIDTH, max(1, tall.total(chunks))))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
 

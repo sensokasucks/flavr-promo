@@ -45,6 +45,12 @@ one; the other slots keep their picks. A day picture's line is slot "day<N>" in 
 (its template facts in p["day_facts"][N], the KoboldCpp facts sentence in p["day_text"][N]).
 The cover (/settings/article/cover) comes in the host's look too (host_cards.cover; p["cover_look"]
 "host" / "board", p["cover_figure"] which picture stands on it).
+Colours (owner 2026-11-22: "more color schemes for article images"): every picture in the host's look
+can be drawn in a colour scheme instead of the host's own colours (flavrpromo/schemes.py). p["scheme"]
+is the article's choice on the Look card ("" = the host's own, a scheme key, "random", "mix"),
+p["schemes"] {section id: key or "host"} one picture's own choice; ``scheme_for`` resolves them and
+the picture routes pass the finished card page through schemes.recolour (tall pictures take the scheme
+as their theme, flavrpromo/tall_page.py). Board-look pictures keep the board's colours.
 "Open the finished article" shows it on the copy page (flavrpromo/web.py ``article_html``): the host
 pictures sit in Save blocks like the day pictures (X can't fetch pictures from the home network).
 
@@ -70,7 +76,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from . import groups, host_cards, host_picker, hosts, kobold, recipes, tall
+from . import groups, host_cards, host_picker, hosts, kobold, recipes, schemes, tall
 from .render import COVER_H, COVER_W, clock
 from .settings_page import _e, frame
 from .web import article_html, article_query, build_article, get_week
@@ -183,7 +189,42 @@ def migrate(p: Dict[str, Any]) -> Dict[str, Any]:
     p.setdefault("day_style", "classic")                  # every day's picture: "classic" or "tall" (a day in detail)
     p.setdefault("day_styles", {})                        # {day number: "classic" / "tall"} where a day differs
     p.setdefault("day_talls", {})                         # {day number: [tall ids]}: the tall picture(s) made for that day
+    p.setdefault("scheme", "")                            # the article's colour scheme (flavrpromo/schemes.py; "" = the host's own)
+    p.setdefault("schemes", {})                           # {picture: scheme key or "host"} where one picture differs
     return p
+
+
+# ── colour schemes (flavrpromo/schemes.py; owner 2026-11-22) ───────────
+def scheme_part(p: Dict[str, Any], sid: str) -> str:
+    """The name a picture goes by in p["schemes"]: its section id ("intro", "day3", "tall2"; "" = the
+    cover). A tall picture made for a day (p["day_talls"]) goes by that day, so the day's Colours menu
+    covers whichever style the day is drawn in."""
+    for n, tids in (p.get("day_talls") or {}).items():
+        if sid in tids:
+            return f"day{n}"
+    return sid
+
+
+def scheme_for(p: Dict[str, Any], sid: str = "") -> str:
+    """The colour scheme key picture ``sid`` of the draft is drawn in ("" = the host's own colours).
+    Called by the picture routes here and by flavrpromo/tall_page.py."""
+    return schemes.of(p, scheme_part(p, sid))
+
+
+def _swatch(key: str, host: str) -> str:
+    """Five little colour dots that show a scheme next to its menu."""
+    return '<span class=sw>' + "".join(f'<i style="background:{c}"></i>' for c in schemes.swatch(key, host)) + '</span>'
+
+
+def _scheme_menu(p: Dict[str, Any], sid: str) -> str:
+    """One picture's own Colours menu (name "scheme_<section id>"): the article's choice, the host's own
+    colours whatever the article says, or any scheme; with the dots of what it is drawn in now."""
+    mine = (p.get("schemes") or {}).get(sid, "")
+    opts = [("", "Colours: same as the article"), ("host", f"{hosts.HOSTS[p['host']]['name'].split()[0]}'s own colours")]
+    opts += schemes.names(p["host"])
+    sel = "".join(f'<option value="{v}"{" selected" if v == mine else ""}>{_e(n)}</option>' for v, n in opts)
+    return (f'<label class=inline>Colours <select name="scheme_{sid}">{sel}</select> '
+            f'{_swatch(schemes.of(p, sid), p["host"])}</label>')
 
 
 def _looks(p: Dict[str, Any]) -> Any:
@@ -498,8 +539,9 @@ def _host_controls(dkey: str, p: Dict[str, Any], sid: str, ai_on: bool) -> str:
         swap = host_picker._switch(p, "desk_kind", "desk card picture", (("desk", "regular"), ("chibi_desk", "chibi")))
     ai = (f'<button name=action value="ai:{sid}" class=alt>✨ New lines for every slot here (in the background)</button>'
           if ai_on else "")
+    colours = _scheme_menu(p, sid) if cur in ("opener", "desk") else ""     # only the cards are drawn in colours
     return (f'<div class=two><div>{"".join(rows)}</div><div><label>Picture <select name="pic_{sid}">{sel}</select>'
-            f'</label>{swap}<p>{ai}</p></div></div>')
+            f'</label>{swap}{colours}<p>{ai}</p></div></div>')
 
 
 def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any = None) -> str:
@@ -520,6 +562,8 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
                 st = "".join(f'<option value="{v}"{" selected" if v == own else ""}>{_e(n)}</option>'
                              for v, n in [("", "Style: same as the article")] + list(DAY_STYLES.items()))
                 line = f'<label class=inline>Style <select name="daystyle_{sid[3:]}">{st}</select></label>'
+                if p.get("day_look", "host") == "host" or day_style(p, sid[3:]) == "tall":
+                    line += " " + _scheme_menu(p, sid)      # (the board look keeps the board's own colours)
             if sid.startswith("day") and day_style(p, sid[3:]) == "tall" and day_talls(p, sid[3:]):
                 # tall style: its picture(s) are built from chunks; the classic layout and bubble line don't apply
                 for t in day_talls(p, sid[3:]):
@@ -548,7 +592,8 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
                         + f'<button name=action value="copy:{sid}" class=alt>Copy</button> '
                         f'<button name=action value="remove:{sid}" class=alt>Remove</button>')
             body = (f'<p><a class=btn href="/settings/tall?d={quote(dkey)}&t={sid}">🧱 Edit the chunks ({n}, '
-                    f'{tall.total(p["talls"][sid]["chunks"])} px tall)</a></p><div class=box>{section_html(dkey, p, s)}</div>')
+                    f'{tall.total(p["talls"][sid]["chunks"])} px tall)</a> {_scheme_menu(p, sid)}</p>'
+                    f'<div class=box>{section_html(dkey, p, s)}</div>')
         else:
             buttons += f'<button name=action value="remove:{sid}" class=alt>Remove</button>'
             body = (f'<textarea name="text_{sid}" rows=4 maxlength={MAX_TEXT} placeholder="Your own words. '
@@ -581,18 +626,29 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
     fig = p.get("cover_figure", "happy")
     fopts = "".join(f'<option value="{k}"{" selected" if k == fig else ""}>{_e(k.replace("_", " "))}</option>'
                     for k, v in hosts.pictures(p["host"]).items() if v and k not in ("head", "chibi_head"))
+    sch = p.get("scheme") or ""
+    sopts = "".join(f'<option value="{v}"{" selected" if v == sch else ""}>{_e(n)}</option>' for v, n in
+                    [("", f"{hosts.HOSTS[p['host']]['name'].split()[0]}'s own colours")] + schemes.names(p["host"])
+                    + [(schemes.RANDOM, "🎲 Surprise me (one scheme for this article)"),
+                       (schemes.MIX, "🎨 Mix (a different scheme for each picture)")])
+    # the dots show what the cover is drawn in (with Mix every picture has its own, shown on its card)
+    colours = (f'<p class=inline>Colours <select name=scheme>{sopts}</select> {_swatch(schemes.of(p, ""), p["host"])} '
+               f'<small>For every picture in the host\'s look: cards, day pictures, tall pictures and the cover. '
+               f'Each picture\'s card has its own Colours menu too.'
+               + (" 🎲 Re-roll below also picks new colours." if sch in (schemes.RANDOM, schemes.MIX) else "")
+               + '</small></p>')
     cover = (f'<div class=covrow><p class=inline>Cover <select name=cover_look>{copts}</select> '
              + (f'<select name=cover_figure>{fopts}</select> ' if cov == "host" else "")
              + f'</p>'
              f'<img class=cov src="{_e(_cover_url(dkey, p))}" alt="cover" loading=lazy></div>')
     # two folding cards on top: the look (live: the cover and the menus are swapped in again after a save) and
     # what can be added (data-nolive: these menus only matter with their own button)
-    head = (f'<details class=card id=look open><summary><b>🎨 Look</b> <span class=what>host, day pictures, cover, '
+    head = (f'<details class=card id=look open><summary><b>🎨 Look</b> <span class=what>host, colours, day pictures, cover, '
             f'which pool pictures</span></summary><div class=inner>'
             f'<p class=inline data-nolive>Host <select name=host>{hopts}</select> <button name=action value=host class=alt>'
             f'Change host</button> <small>Changing the host gives new lines for both host sections and the day pictures.</small></p>'
             f'<div data-swap=rebuild data-swap-id=look><p class=inline>Day pictures <select name=day_look>{lopts}</select> '
-            f'<select name=day_layout>{alls}</select> <label>Day style <select name=day_style>{dsty}</select></label> <label>tall seams <select name=day_seams>{dseam}</select></label></p>{cover}{ai_note}{_variation_picker(p)}</div></div></details>'
+            f'<select name=day_layout>{alls}</select> <label>Day style <select name=day_style>{dsty}</select></label> <label>tall seams <select name=day_seams>{dseam}</select></label></p>{colours}{cover}{ai_note}{_variation_picker(p)}</div></div></details>'
             f'<details class=card id=add open><summary><b>➕ Add to the article</b> <span class=what>tall sections, your own '
             f'text, a fresh calendar</span></summary><div class=inner data-nolive>{_recipe_row(week, poster.store)}'
             f'<p class=help>Calendar sections are as of {built}. <button name=action value=regen_all class=alt>↻ Regen every '
@@ -620,7 +676,10 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
              "fieldset label{margin:4px 0}.ai{color:#b7ef33}a.btn{background:#2a2d3a;color:#fff;padding:8px 12px;"
              "border-radius:8px;text-decoration:none;font-weight:bold}.bar{position:sticky;bottom:0;background:#1b1018;"
              "padding:10px 0;margin:0}button[disabled]{opacity:.35}legend .mini{padding:2px 9px;margin-left:4px;font-size:14px}"
-             ".cov{width:min(600px,100%);border-radius:8px;display:block}")
+             ".cov{width:min(600px,100%);border-radius:8px;display:block}"
+             # the five colour dots beside a Colours menu (``_swatch``)
+             ".sw{display:inline-flex;vertical-align:middle;border-radius:6px;overflow:hidden;border:1px solid #fff4}"
+             ".sw i{display:block;width:15px;height:15px}")
     # ✨ waits for KoboldCpp (one request): show that it's working instead of a page that looks stuck
     body += ("<script>document.querySelector('form[data-live]').addEventListener('submit',e=>{const b=e.submitter;"
              "if(b&&/^(ask|ai):/.test(b.value)){b.textContent='✨ writing… (up to a minute)';"
@@ -739,6 +798,17 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
         v = str(form.get(f"daylayout_{i}") or "")
         if f"daylayout_{i}" in form and (v in host_cards.DAY_LAYOUTS or not v):
             p.setdefault("day_layouts", {})[str(i)] = v
+    if "scheme" in form:                            # the article's colour scheme (flavrpromo/schemes.py)
+        v = str(form.get("scheme") or "")
+        if v in ("", schemes.RANDOM, schemes.MIX) or (schemes.get(v) and v != p["host"]):
+            p["scheme"] = v
+    for sid in list(HOST_SECTIONS) + [f"day{i}" for i in range(7)] + list(p.get("talls") or {}):
+        if f"scheme_{sid}" in form:                 # one picture's own choice ("" = the article's)
+            v = str(form.get(f"scheme_{sid}") or "")
+            if v == "host" or (schemes.get(v) and v != p["host"]):
+                p.setdefault("schemes", {})[sid] = v
+            else:
+                p.setdefault("schemes", {}).pop(sid, None)
     for sid in list(p.get("texts") or {}):
         if f"text_{sid}" in form:
             p["texts"][sid] = str(form.get(f"text_{sid}") or "").replace("\r\n", "\n").strip()[:MAX_TEXT]
@@ -908,7 +978,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
                 raise web.HTTPServiceUnavailable(text="No Chromium for pictures.")
             migrate(p)
             with _looks(p):
-                png = await poster.shooter.png(host_picker.card_html(p, pic))
+                png = await poster.shooter.png(schemes.recolour(host_picker.card_html(p, pic), scheme_for(p, sec)))
             return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
         kind = pic[4:] if pic.startswith("pic:") else ""
         migrate(p)
@@ -935,9 +1005,9 @@ def add_routes(app: web.Application, poster: Any) -> None:
         week, _ = await _article(poster, p)
         await poster.images.fetch_all(week)         # the stream thumbnails, cached like the board's
         with _looks(p):
-            png = await poster.shooter.png(host_cards.day(
+            png = await poster.shooter.png(schemes.recolour(host_cards.day(
                 p["host"], week, i, poster.images.data_url, host_picker.chosen(p, f"day{i}"),
-                layout=(p.get("day_layouts") or {}).get(str(i)) or p.get("day_layout", "wall")))
+                layout=(p.get("day_layouts") or {}).get(str(i)) or p.get("day_layout", "wall")), scheme_for(p, f"day{i}")))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
 
     async def cover_picture(request: web.Request) -> web.Response:
@@ -953,8 +1023,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
         await poster.images.fetch_all(week)
         heading = host_picker.heading_of(p, "Week in Review")
         with _looks(p):
-            png = await poster.shooter.png(host_cards.cover(p["host"], week, poster.images.data_url, heading,
-                                                            p.get("cover_figure") or "happy"), size=(COVER_W, COVER_H))
+            page_ = host_cards.cover(p["host"], week, poster.images.data_url, heading, p.get("cover_figure") or "happy")
+            png = await poster.shooter.png(schemes.recolour(page_, scheme_for(p)), size=(COVER_W, COVER_H))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
 
     async def view(request: web.Request) -> web.Response:
