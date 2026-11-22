@@ -9,7 +9,7 @@ sits in the article. The editor's "+ Add a tall picture" makes one from a built-
 edits it:
   * a height meter (the picture is at most tall.MAX_H = 2133 px tall on X; more is cropped from the middle),
   * a preview (/settings/tall/picture, drawn with Chromium like the other card pictures),
-  * for each chunk: its size, the shape of its bottom edge (straight or a diagonal cut, gentle to steep,
+  * for each chunk: its size, the shape of its bottom edge (straight, a diagonal cut, a zigzag, a wave or a curve, gentle to steep,
     with a stripe along the seam), its menus (host, pose or chibi, which pooled picture, side, day, stream,
     a line picked from the article's own lines or typed), ↑ ↓ duplicate remove, "save this chunk as",
   * stream and game chunks: tick boxes for what they show (tall.SHOW: picture, name, time, genre, host
@@ -221,7 +221,10 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
             + ("" if i == len(chunks) - 1 else
                f'<p><label>Bottom edge <select name="{cid}__cut">{_opts(tall.CUTS.items(), c.get("cut") or "")}</select></label> '
                f'<label>Slope <select name="{cid}__slope">{_opts([("0", "Gentle"), ("1", "Normal"), ("2", "Steep")], c.get("slope", 1))}'
-               f'</select></label></p>')
+               f'</select></label>'
+               + (f' <label>Teeth / waves <input type=number name="{cid}__teeth" value="{tall.teeth(c)}" '
+                  f'min={tall.TEETH[c["cut"]][0]} max={tall.TEETH[c["cut"]][1]} style="width:5em"></label>'
+                  if c.get("cut") in tall.TEETH else "") + '</p>')
             + f'<p class=savebox data-nolive><input name="{cid}__savename" placeholder="save this chunk as…" maxlength={NAME_MAX}> '
             f'<button name=action value="savechunk:{cid}" class=alt>Save chunk</button></p></div></details>')
     add = _opts([(k, v[0]) for k, v in tall.TYPES.items()], "quote")
@@ -243,7 +246,8 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
         f'<button name=action value=savetpl class=alt>Save stack</button></p>'
         + (f'<p><select name=delwhat>{dels}</select> <button name=action value=delsaved class=alt>Delete saved</button></p>'
            if (saved_chunks or templates) else "") + '</section>')
-    back = f'/settings/article?group={quote(p["group"])}&which={quote(p["which"])}#s-{tid}'
+    home = f'day{p["talls"][tid]["day"]}' if p["talls"][tid].get("day") is not None else tid   # a day's own tall picture
+    back = f'/settings/article?group={quote(p["group"])}&which={quote(p["which"])}#s-{home}'
     pic = f'/settings/tall/picture?d={quote(dkey)}&t={tid}&v={article_editor.stamp(p, tid)}'
     # data-live: the form saves itself and the parts marked data-swap are refreshed (flavrpromo/panel.py SCRIPT);
     # the chunk list is a data-draglist: dropping a card posts action=order with the ids in the hidden "order"
@@ -283,6 +287,8 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
         c["cut"] = get("cut")
     if get("slope") in ("0", "1", "2"):
         c["slope"] = int(get("slope"))
+    if get("teeth") is not None and c.get("cut") in tall.TEETH:     # how many teeth (zigzag) / waves
+        c["teeth"] = tall.teeth(dict(c, teeth=get("teeth")))
     if get("band") is not None:                 # the colour menu; "custom" takes the colour box next to it
         want = str(get("bandhex") or "") if get("band") == "custom" else str(get("band"))
         c["band"] = want if tall.band_colour({"band": want}) else ""

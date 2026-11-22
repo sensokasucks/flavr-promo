@@ -14,6 +14,8 @@ and the owner's own text sections. For each section the owner can:
   * the page saves itself as menus and tick boxes change and swaps in only what changed (flavrpromo/panel.py
     SCRIPT; pictures carry ``stamp`` in their URL so only a changed one is drawn again); sections are folding
     cards that can be dragged into a new order; a tall section can be copied;
+  * day style: every day section shows its classic picture or, as a choice for the whole article and per day,
+    a tall "day in detail" picture built from chunks (``day_style``, ``ensure_day_talls``);
   * "+ Add a tall section" (flavrpromo/recipes.py): a ready-made tall picture for the games of the week, one
     day in detail or one person's week, split over several pictures when it is long; its ✨ has KoboldCpp
     write each stream's / game's remark. "+ Add a tall picture" below is the empty stack to build by hand.
@@ -177,6 +179,9 @@ def migrate(p: Dict[str, Any]) -> Dict[str, Any]:
     p.setdefault("seed", int(p.get("built_at") or 0))    # which pool picture each kind shows (hosts.look)
     p.setdefault("pins", {})                              # {picture kind: pool picture id} chosen by hand
     p.setdefault("talls", {})                             # {section id "tall1": {"chunks": [...]}} (flavrpromo/tall.py)
+    p.setdefault("day_style", "classic")                  # every day's picture: "classic" or "tall" (a day in detail)
+    p.setdefault("day_styles", {})                        # {day number: "classic" / "tall"} where a day differs
+    p.setdefault("day_talls", {})                         # {day number: [tall ids]}: the tall picture(s) made for that day
     return p
 
 
@@ -293,7 +298,57 @@ def _refresh(p: Dict[str, Any], a: Dict[str, Any], only: str = "") -> str:
 
 
 # ── what each section looks like in the article ────────────────────────────
-_STAMP_SKIP = ("saved_at", "texts", "talls", "sections", "picks", "candidates", "ai", "ai_state", "ai_raw")
+DAY_STYLES = {"classic": "Classic picture", "tall": "Tall picture (the day in detail)"}
+
+
+def day_style(p: Dict[str, Any], n: Any) -> str:
+    """"classic" or "tall" for day ``n`` (owner 2026-11-22: "an option so i can choose between tall and classic
+    styles"): the day's own choice, else the article's."""
+    own = (p.get("day_styles") or {}).get(str(n)) or ""
+    return own if own in DAY_STYLES else (p.get("day_style") if p.get("day_style") in DAY_STYLES else "classic")
+
+
+def day_talls(p: Dict[str, Any], n: Any) -> List[str]:
+    """The ids of the tall picture(s) made for day ``n`` that still exist (p["talls"]; a long day has several)."""
+    return [t for t in (p.get("day_talls") or {}).get(str(n)) or [] if t in (p.get("talls") or {})]
+
+
+async def ensure_day_talls(poster: Any, p: Dict[str, Any]) -> None:
+    """Make the tall picture(s) of every day whose style is "tall" and that has none yet: the "one day in detail"
+    recipe (flavrpromo/recipes.py), kept in p["talls"] like any tall picture (so the builder edits it) but
+    shown inside the day's own section instead of the classic picture. A day with no streams stays classic.
+    Called after every save; switching a day back to classic keeps its tall picture for the next switch."""
+    week = None
+    for s in p["sections"]:
+        n = s["id"][3:]
+        if not (s["id"].startswith("day") and n.isdigit()) or day_style(p, n) != "tall" or day_talls(p, n):
+            continue
+        if week is None:
+            week, _ = await _article(poster, p)
+        built, _err = recipes.build("day", p, week, n, str(p.get("day_seams") or ""))
+        ids = []
+        for _title, chunks in built:
+            tid = recipes.next_tall_id(p)
+            p.setdefault("talls", {})[tid] = {"chunks": chunks, "day": n}
+            ids.append(tid)
+        p.setdefault("day_talls", {})[n] = ids
+
+
+def _drop_day_talls(p: Dict[str, Any], n: str = "") -> None:
+    """Forget the tall picture(s) of day ``n`` ("" = of every day): "Regen from the calendar" builds them anew."""
+    for day in ([n] if n else list(p.get("day_talls") or {})):
+        for tid in (p.get("day_talls") or {}).pop(day, []):
+            (p.get("talls") or {}).pop(tid, None)
+
+
+def _tall_block(dkey: str, p: Dict[str, Any], tid: str) -> str:
+    url = html.escape(f"/settings/tall/picture?d={quote(dkey)}&t={tid}&v={stamp(p, tid)}", quote=True)
+    return (f'<div class="nocopy"><img src="{url}" alt="tall picture">'
+            f'<p>Tall picture · <a href="{url}" download="{tid}.png">Save</a> · put it here with X\'s picture button</p></div>')
+
+
+_STAMP_SKIP = ("saved_at", "texts", "talls", "sections", "picks", "candidates", "ai", "ai_state", "ai_raw",
+               "day_style", "day_styles", "day_talls", "day_seams")
 
 
 def stamp(p: Dict[str, Any], part: str = "") -> int:
@@ -341,14 +396,19 @@ def section_html(dkey: str, p: Dict[str, Any], s: Dict[str, Any]) -> str:
         rows = [x for x in rows if x]
         return block + "".join(f"<p>{who if i == 0 else ''}{'<i>' if i == len(rows) - 1 and i else ''}{e(x)}"
                                f"{'</i>' if i == len(rows) - 1 and i else ''}</p>" for i, x in enumerate(rows))
+    if sid.startswith("day") and day_style(p, sid[3:]) == "tall" and day_talls(p, sid[3:]):
+        # tall style: the day's tall picture(s) take the place of the classic picture block
+        blocks = "".join(_tall_block(dkey, p, t) for t in day_talls(p, sid[3:]))
+        body = s.get("html") or ""
+        if '<div class="nocopy">' in body:
+            return re.sub(r'(?s)<div class="nocopy">.*?</div>', lambda _m: blocks, body, count=1)
+        return body.replace("</h2>", "</h2>" + blocks, 1)
     if sid.startswith("day") and p.get("day_look", "host") == "host":
         # the snapshot's board-look day picture (/calendar/day.png...day=N) → the host's look
         url = f"/settings/article/day?d={quote(dkey)}&day={sid[3:]}&t={stamp(p, sid)}"
         return re.sub(r'/calendar/day\.png[^"]*?day=\d', html.escape(url, quote=True), s.get("html") or "")
     if sid in (p.get("talls") or {}):
-        url = html.escape(f"/settings/tall/picture?d={quote(dkey)}&t={sid}&v={stamp(p, sid)}", quote=True)
-        return (f'<div class="nocopy"><img src="{url}" alt="tall picture">'
-                f'<p>Tall picture · <a href="{url}" download="{sid}.png">Save</a> · put it here with X\'s picture button</p></div>')
+        return _tall_block(dkey, p, sid)
     if sid in (p.get("texts") or {}):
         paras = [x.strip() for x in str(p["texts"][sid]).split("\n\n") if x.strip()]
         return "".join(f"<p>{html.escape(x).replace(chr(10), '<br>')}</p>" for x in paras)
@@ -438,11 +498,26 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
         if kind == "calendar":
             buttons += f'<button name=action value="regen:{sid}">↻ Regen from the calendar</button>'
             line = ""
-            if sid.startswith("day") and p.get("day_look", "host") == "host":
+            if sid.startswith("day") and sid[3:].isdigit():
+                own = (p.get("day_styles") or {}).get(sid[3:], "")
+                st = "".join(f'<option value="{v}"{" selected" if v == own else ""}>{_e(n)}</option>'
+                             for v, n in [("", "Style: same as the article")] + list(DAY_STYLES.items()))
+                line = f'<label class=inline>Style <select name="daystyle_{sid[3:]}">{st}</select></label>'
+            if sid.startswith("day") and day_style(p, sid[3:]) == "tall" and day_talls(p, sid[3:]):
+                # tall style: its picture(s) are built from chunks; the classic layout and bubble line don't apply
+                for t in day_talls(p, sid[3:]):
+                    chunks = p["talls"][t]["chunks"]
+                    line += (f'<p><a class=btn href="/settings/tall?d={quote(dkey)}&t={t}">🧱 Edit the chunks ({len(chunks)}, '
+                             f'{tall.total(chunks)} px tall)</a> '
+                             + (f'<button name=action value="aitall:{t}" class=alt>✨ Write remarks</button>' if ai_on else "")
+                             + '</p>')
+            elif sid.startswith("day") and day_style(p, sid[3:]) == "tall":
+                line += '<p class=help>No streams on this day, so it keeps the classic picture.</p>'
+            elif sid.startswith("day") and p.get("day_look", "host") == "host":
                 mine = (p.get("day_layouts") or {}).get(sid[3:], "")
                 lay = "".join(f'<option value="{v}"{" selected" if v == mine else ""}>{_e(n)}</option>'
                               for v, n in [("", "Layout: same as the article")] + list(host_cards.DAY_LAYOUTS.items()))
-                line = (f'<label>Layout <select name="daylayout_{sid[3:]}">{lay}</select></label>'
+                line += (f'<label>Layout <select name="daylayout_{sid[3:]}">{lay}</select></label>'
                         + _line_choices(p, sid, f'{hosts.HOSTS[p["host"]]["name"]}\'s line on this picture', ai_on,
                                         none="no line (no bubble)"))
             body = line + f'<div class=box>{section_html(dkey, p, s)}</div>'
@@ -479,6 +554,10 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
                     for v, n in (("host", "In the host's look (with their line)"), ("board", "Board look")))
     alls = "".join(f'<option value="{v}"{" selected" if v == p.get("day_layout", "wall") else ""}>{_e(n)}</option>'
                    for v, n in host_cards.DAY_LAYOUTS.items())
+    dsty = "".join(f'<option value="{v}"{" selected" if v == p.get("day_style", "classic") else ""}>{_e(n)}</option>'
+                   for v, n in (("classic", "Classic pictures"), ("tall", "Tall pictures (each day in detail)")))
+    dseam = "".join(f'<option value="{v}"{" selected" if v == p.get("day_seams", "") else ""}>{_e(n)}</option>'
+                    for v, n in recipes.SEAMS.items())      # used when a day's tall picture is built (Regen rebuilds it)
     cov = p.get("cover_look", "host")
     copts = "".join(f'<option value="{v}"{" selected" if v == cov else ""}>{_e(n)}</option>'
                     for v, n in (("host", "In the host's look"), ("board", "Board look")))
@@ -496,7 +575,7 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
             f'<p class=inline data-nolive>Host <select name=host>{hopts}</select> <button name=action value=host class=alt>'
             f'Change host</button> <small>Changing the host gives new lines for both host sections and the day pictures.</small></p>'
             f'<div data-swap=rebuild data-swap-id=look><p class=inline>Day pictures <select name=day_look>{lopts}</select> '
-            f'<select name=day_layout>{alls}</select></p>{cover}{ai_note}{_variation_picker(p)}</div></div></details>'
+            f'<select name=day_layout>{alls}</select> <label>Day style <select name=day_style>{dsty}</select></label> <label>tall seams <select name=day_seams>{dseam}</select></label></p>{cover}{ai_note}{_variation_picker(p)}</div></div></details>'
             f'<details class=card id=add open><summary><b>➕ Add to the article</b> <span class=what>tall sections, your own '
             f'text, a fresh calendar</span></summary><div class=inner data-nolive>{_recipe_row(week, poster.store)}'
             f'<p class=help>Calendar sections are as of {built}. <button name=action value=regen_all class=alt>↻ Regen every '
@@ -542,7 +621,7 @@ def _recipe_row(week: Any, store: Any = None) -> str:
     return (f'<p class=recipe><b>+ Add a tall section</b> <select name=recipe>{o(recipes.RECIPES.items())}</select> '
             f'<label>day <select name=recipe_day>{o(days)}</select></label> '
             f'<label>person <select name=recipe_person>{o((n, n) for n in recipes.people(week))}</select></label> '
-            f'<select name=recipe_seams>{o([("", "straight seams"), ("diagonal", "diagonal seams")])}</select> '
+            f'<select name=recipe_seams>{o(recipes.SEAMS.items())}</select> '
             f'<button name=action value=add_recipe class=alt>Build it</button> '
             f'<small>(day / person only matter for that recipe; edit the chunks afterwards)</small></p>'
             # a tall picture from a stack: a built-in one or one you saved in the builder (this week's streams / games go in)
@@ -631,6 +710,14 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
         p["day_look"] = str(form.get("day_look"))
     if str(form.get("day_layout") or "") in host_cards.DAY_LAYOUTS:
         p["day_layout"] = str(form.get("day_layout"))
+    if "day_seams" in form and str(form.get("day_seams") or "") in recipes.SEAMS:
+        p["day_seams"] = str(form.get("day_seams") or "")
+    if str(form.get("day_style") or "") in DAY_STYLES:
+        p["day_style"] = str(form.get("day_style"))
+    for i in range(7):
+        v = str(form.get(f"daystyle_{i}") or "")
+        if f"daystyle_{i}" in form and (v in DAY_STYLES or not v):
+            p.setdefault("day_styles", {})[str(i)] = v
     for i in range(7):
         v = str(form.get(f"daylayout_{i}") or "")
         if f"daylayout_{i}" in form and (v in host_cards.DAY_LAYOUTS or not v):
@@ -713,7 +800,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
             if sorted(ids) == sorted(by):
                 p["sections"] = [by[x] for x in ids]
                 note = "Moved."
-        elif verb == "copy" and sid in (p.get("talls") or {}):      # a second copy of a tall section, to vary
+        elif verb == "copy" and sid in (p.get("talls") or {}) and any(x["id"] == sid for x in p["sections"]):      # a second copy of a tall section, to vary
             new_id = recipes.next_tall_id(p)
             p["talls"][new_id] = {"chunks": json.loads(json.dumps(p["talls"][sid]["chunks"]))}
             at = next(i for i, x in enumerate(p["sections"]) if x["id"] == sid)
@@ -724,7 +811,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
             week, _ = await _article(poster, p)
             which_recipe = str(form.get("recipe") or "")
             arg = str(form.get("recipe_day") if which_recipe == "day" else form.get("recipe_person") or "")
-            built, err = recipes.build(which_recipe, p, week, arg, str(form.get("recipe_seams") or "") == "diagonal")
+            built, err = recipes.build(which_recipe, p, week, arg, str(form.get("recipe_seams") or ""))
             if err:
                 note = err
             else:
@@ -776,9 +863,11 @@ def add_routes(app: web.Application, poster: Any) -> None:
             note = _refresh(p, a, sid if verb == "regen" else "")
             if sid.startswith("day") or verb == "regen_all":
                 _day_lines(p, week, sid[3:] if verb == "regen" else "")
+                _drop_day_talls(p, sid[3:] if verb == "regen" else "")     # tall day pictures are built anew below
             if verb == "regen_all":         # the facts (and so the host lines' numbers) may have moved too
                 p["facts"] = hosts.facts(store, week)
                 p["notes"] = hosts.notes(p["facts"])
+        await ensure_day_talls(poster, p)       # a day just switched to the tall style gets its picture
         p["saved_at"] = time.time()
         store.put(dkey, p)
         if verb == "ai" and sid in HOST_SECTIONS:
