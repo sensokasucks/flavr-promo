@@ -364,3 +364,51 @@ def test_stream_chunks_can_be_colour_strips_like_the_day_pictures(tmp_path):
         assert tall.total(built) <= tall.MAX_H and [c["look"] for c in built if c["type"] == "stream"] == ["strip"] * 4
     finally:
         hosts.init(None)
+
+
+def test_the_other_article_styles_are_native_chunks(tmp_path):
+    """Owner 2026-11-22: "did it bring in all the styles the articles can use?" then "rebuild as native chunks": the day
+    pictures' layouts on the grid chunk, the opener's sticky notes on the stats chunk and the cover's people cards."""
+    hosts.init(tmp_path / "pics")
+    from types import SimpleNamespace
+    try:
+        def tile(n, name, length, plats=("youtube",)):
+            return SimpleNamespace(name=name, game="G", title=f"title {n}", at=1700000000 + n * 9000, end=1, kind="past", thumb="", avatar="",
+                                   length=length, platforms=list(plats), person_id=n, url="", links={})
+
+        class Week(SimpleNamespace):
+            def tiles(self):
+                return [t for d in self.days for t in d]
+
+        day = [tile(i, f"Person{i}", 3600 * (i + 1)) for i in range(7)]
+        week = Week(days=[day], day_name=lambda i: "MONDAY", tz=None, recap=True)
+        notes = [{"label": "LONGEST STREAM", "value": "Person6 · 7 h"}, {"label": "MOST SHOWS", "value": "Person1 · 5"}]
+        ctx = {"host": "colette", "week": week, "img": lambda u: "", "notes": notes, "facts": {}, "heading": "H", "range": "R", "seed": 1,
+               "pins": {}, "comments": ["approved for the highlight reel", ""]}
+
+        def draw(c, **more):
+            return tall.document([c], dict(ctx, **more))
+        # the grid layouts: each is its own picture, from the same streams, and none is taller than its chunk
+        docs = {k: draw(tall.new_chunk("grid", [], size=2, day=0, layout=k)) for k in tall.GRID_LAYOUTS}
+        assert len(set(docs.values())) == len(docs)
+        assert "TOP PICK!" in docs["spotlight"] and "Person6" in docs["spotlight"] and "TOP PICK!" not in docs[""]
+        assert docs["spotlight"].count(">Y</span>") == 1 + tall.SPOT_MAX               # the big one and at most SPOT_MAX beside it
+        assert docs["timeline"].count("Person") == 5 and docs["columns"].count("Person") == 7 and docs["cards"].count("Person") == 6
+        assert "grid-template-columns:repeat(2," in docs["columns"] and "repeat(3," in docs["cards"]
+        assert draw(tall.new_chunk("grid", [], day=0, layout="zzz")) == draw(tall.new_chunk("grid", [], day=0))      # unknown = the wall
+        assert "Nothing on this day." in draw(tall.new_chunk("grid", [], day=0, layout="cards"), week=Week(days=[[]], day_name=lambda i: "SUN", tz=None))
+        # the sticky notes: tilted colour notes with the host's comment (only where one was picked); cards are unchanged
+        sticky = draw(tall.new_chunk("stats", [], size=1, look="notes"))
+        assert "📌 LONGEST STREAM" in sticky and "“approved for the highlight reel”" in sticky and "MOST SHOWS" in sticky
+        assert sticky.count("“") == 1 and "rotate(-2.2deg)" in sticky and tall.schemes.BASE["colette"]["notes"][0] in sticky
+        assert "📌" not in draw(tall.new_chunk("stats", [], size=1)) and "📌" not in draw(tall.new_chunk("stats", [], size=1, look="notes"), host="clark")
+        # the people cards: the cover's people with their numbers; small shows four, the others eight
+        small, big = draw(tall.new_chunk("people", [], size=0)), draw(tall.new_chunk("people", [], size=1))
+        assert small.count("Person") == 4 and big.count("Person") == 7 < tall.COVER_PICS and "1 stream" in big      # all seven fit in eight
+        assert "No people on the calendar yet." in draw(tall.new_chunk("people", [], size=1), week=SimpleNamespace(days=[[]], day_name=lambda i: "", tz=None))
+        # a colour scheme reaches them, and the built-in stacks using them fit
+        assert tall.schemes.get("ocean")["notes"][1] in draw(tall.new_chunk("people", [], size=1), scheme="ocean")
+        for name in ("Week in cards", "Day spotlight"):
+            assert tall.total(tall.BUILTIN[name]) <= tall.MAX_H, name
+    finally:
+        hosts.init(None)

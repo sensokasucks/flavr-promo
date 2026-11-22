@@ -415,6 +415,8 @@ def stamp(p: Dict[str, Any], part: str = "") -> int:
         mine = [host_picker.chosen(p, x) for x in _slots_of(part, p)]
     elif part in (p.get("talls") or {}):          # its chunks and its own host style (the builder's Look card)
         mine = [p["talls"][part].get("chunks"), p["talls"][part].get("host") or ""]
+        if any(c.get("type") == "stats" and c.get("look") == "notes" for c in p["talls"][part].get("chunks") or []):
+            mine.append([host_picker.chosen(p, f"note{i}") for i in range(len(p.get("notes") or []))])    # the sticky notes' comments
     elif part:
         mine = host_picker.chosen(p, part)
     return zlib.crc32(json.dumps([base, mine], sort_keys=True, default=str).encode())

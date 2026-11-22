@@ -268,7 +268,15 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str], s
                 f'<small>(KoboldCpp writes a few from this {t}\'s facts to pick from; the page waits for it)</small></p>')
     if t == "grid":
         days = [(str(i), week.day_name(i)) for i in range(len(week.days))]
-        return f'<label>Day <select name="{cid}__day">{_opts(days, c.get("day") or 0)}</select></label>'
+        return (f'<label>Day <select name="{cid}__day">{_opts(days, c.get("day") or 0)}</select></label> '
+                f'<label>Layout <select name="{cid}__layout">{_opts(tall.GRID_LAYOUTS.items(), c.get("layout") or "")}</select></label>')
+    if t == "stats":
+        return (f'<label>Look <select name="{cid}__look">{_opts(tall.STATS_LOOKS.items(), c.get("look") or "")}</select></label> '
+                f'<small>Filled from the review\'s highlight numbers; the sticky notes also show the host\'s comment on each, '
+                f'when the article has picked one.</small>')
+    if t == "people":
+        return ('<small>The week\'s people as tilted colour cards, like the cover: their picture, name, hours and streams. '
+                'Small shows four, medium and large eight.</small>')
     if t == "quote":
         return _line_field(c, "text", lines, "Line from the article")
     return '<small>Filled from the review\'s highlight numbers.</small>'
@@ -285,6 +293,8 @@ def _what(c: Dict[str, Any], p: Dict[str, Any], week: Any) -> str:
         return week.day_name(int(c.get("day") or 0)) if getattr(week, "days", None) else ""
     if t == "chat":
         return str(c.get("lines") or "").split("\n")[0]
+    if t == "people":
+        return "the week's people"
     return str(c.get("title") or c.get("line") or c.get("text") or "")
 
 
@@ -520,6 +530,10 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
             c["var"] = get("var") if get("var") in [v for v, _ in hosts.variants(key, c.get("kind") or "happy")] else ""
     if t == "grid" and str(get("day") or "").isdigit():
         c["day"] = max(0, min(len(week.days) - 1, int(get("day"))))
+    if t == "grid" and get("layout") is not None:           # the day pictures' layouts (tall.GRID_LAYOUTS)
+        c["layout"] = get("layout") if get("layout") in tall.GRID_LAYOUTS else ""
+    if t == "stats" and get("look") is not None:            # cards, or the opener's sticky notes
+        c["look"] = get("look") if get("look") in tall.STATS_LOOKS else ""
     for field in ("line", "text"):
         if field in c or (field == "line" and t in ("host", "footer", "stream")) or (field == "text" and t == "quote"):
             pick = get(f"pick_{field}")
@@ -812,6 +826,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
         ctx = {"host": p["host"], "week": week, "img": poster.images.data_url, "facts": f, "notes": p.get("notes"),
                "heading": host_picker.heading_of(p, "Week in Review"), "range": f.get("range") or "",
                "seed": p.get("seed"), "pins": p.get("pins"), "scheme": article_editor.scheme_for(p, tid),
+               # the host's picked comment on each highlight (the opener's), for the sticky-note look of a stats chunk
+               "comments": [host_picker.chosen(p, f"note{i}") for i in range(len(p.get("notes") or []))],
                **recipes.drawing_context(store, p, week, chunks)}
         png = await poster.shooter.png(tall.document(chunks, ctx), size=(tall.WIDTH, max(1, tall.total(chunks))))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})

@@ -169,6 +169,22 @@ async def test_the_tall_pictures_page_opens_a_stack_editor_directly(tmp_path):
             loc = await make(action="add_recipe", recipe="day", recipe_day=str(day), recipe_look="strip")
             made = store.get(dkey)["talls"][loc.split("t=")[1].split("&")[0].split("#")[0]]["chunks"]
             assert [x["look"] for x in made if x["type"] == "stream"] == ["strip"] * len([x for x in made if x["type"] == "stream"]) and made
+            # the other article styles: layouts on a day's pictures chunk, sticky notes on highlights, people cards
+            ch, _ = await build("add", newtype="grid")
+            gid = ch[-1]["id"]
+            ch, _ = await build("save", **{f"{gid}__layout": "spotlight"})
+            assert next(x for x in ch if x["id"] == gid)["layout"] == "spotlight"
+            ch, _ = await build("save", **{f"{gid}__layout": "nonsense"})
+            assert next(x for x in ch if x["id"] == gid)["layout"] == ""
+            ch, _ = await build("add", newtype="stats")
+            nid = ch[-1]["id"]
+            ch, _ = await build("save", **{f"{nid}__look": "notes"})
+            assert next(x for x in ch if x["id"] == nid)["look"] == "notes"
+            ch, _ = await build("add", newtype="people")
+            page = await builder()
+            assert f'name="{gid}__layout"' in page and f'name="{nid}__look"' in page and "tilted colour cards" in page
+            await c.get(f"/settings/tall/picture?d={dkey}&t=tall1")                   # all of them draw
+            assert "TOP PICK" not in poster.shooter.docs[-1] and "📌" in poster.shooter.docs[-1]
             # the article editor's recipe row and Look card offer it too
             page = await (await c.get("/settings/article?group=flavr&which=week")).text()
             assert "name=recipe_look" in page and "name=day_stream_look" in page
