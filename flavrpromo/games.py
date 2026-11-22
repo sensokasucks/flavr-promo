@@ -9,8 +9,10 @@ Which game:
     platform's game wins, else any platform that has one.
   * YouTube has no category, so its title is used (owner 2026-11-21, "game detection for YouTube"),
     in this order (``detect_how`` says which one answered):
-      fix      a title the owner set by hand before (``/friend game`` remembers the stream's title
-               → game, kv title_games.<person id>): the same title again means the same game
+      fix      a title the owner set by hand before (``/friend game`` and the tall picture builder's
+               game picker remember the stream's title → game, kv title_games.<person id>): the same
+               title again means the same game, on the calendar too (flavrpromo/calendar.py gives a
+               stream with no game the one its title was given, planned streams included)
       words    the person's own title words for a game (``/friend game words:``, kv
                game_words.<person id>: "cooking" → Schedule I)
       known    the games this person (else anyone the bot follows) played before: the longest known
@@ -190,6 +192,49 @@ def remember_fix(store: Store, person_id: int, title: str, game: str) -> None:
     fixes.pop(key, None)
     fixes[key] = game
     store.put(f"title_games.{person_id}", dict(list(fixes.items())[-KEEP_FIXES:]))
+
+
+def forget_fix(store: Store, person_id: int, title: str) -> None:
+    """Undo ``remember_fix`` for this title (the owner cleared the game in the tall picture builder)."""
+    fixes = dict(store.get(f"title_games.{person_id}") or {})
+    if fixes.pop(_norm(title), None) is not None:
+        store.put(f"title_games.{person_id}", fixes)
+
+
+def fixed(store: Store, person_id: int, title: str) -> str:
+    """The game the owner gave this title by hand ("" = none)."""
+    return str((store.get(f"title_games.{person_id}") or {}).get(_norm(title)) or "") if _norm(title) else ""
+
+
+def set_stream(store: Store, person_id: int, title: str, game: str, session_id: Optional[int] = None,
+               live: bool = False) -> str:
+    """The owner set one stream's game by hand in the tall picture builder (flavrpromo/tall_page.py;
+    owner 2026-11-22: "if it can't detect the game automatically, can it let me select and/or search
+    for it?"). Returns the game as kept ("" = cleared).
+      * a stream the bot saw (``session_id``): its row gets the game (the calendar, reviews and the game
+        history read it). A stream with ONE game segment has that segment renamed (its history tag worked
+        out again); a live stream with none gets one (``track``); a stream that changed games keeps its
+        segments, only the game shown for it changes.
+      * the title is remembered (``remember_fix``), so the same title means this game next time, and a
+        planned stream with that title shows it too. An empty ``game`` forgets it again.
+    The live card isn't edited from here; it picks the game up at the stream's next change."""
+    game = " ".join(str(game or "").split())[:100]
+    if session_id:
+        store.update_session(session_id, game=game)
+        segs = store.segments(session_id)
+        if len(segs) == 1 and segs[0]["game"].lower() != game.lower():
+            if game:
+                store.segment_set(segs[0]["id"], game, tag(store, person_id, game, float(segs[0]["started_at"]), session_id))
+            else:
+                store.segment_drop(segs[0]["id"])
+        elif not segs and game and live:
+            track(store, session_id, person_id, game, time.time())
+    if person_id and _norm(title):
+        if game:
+            remember_fix(store, person_id, title, game)
+        else:
+            forget_fix(store, person_id, title)
+    return game
 
 
 def set_words(store: Store, person_id: int, words: str, game: str) -> str:

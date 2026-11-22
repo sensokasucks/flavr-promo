@@ -16,6 +16,15 @@ edits it:
     picture ...; "mix n match the content of each segment") and a ✨ that has KoboldCpp write the remark
     from that stream's / game's facts (flavrpromo/recipes.py); "✨ Write all remarks" does every empty one
     in the background,
+  * a stream chunk's game (owner 2026-11-22: "if it can't detect the game automatically, can it let me
+    select and/or search for it?"): the chunk says which game the stream has, with a box to type it (known
+    games are suggested), "Set game", and "🔎 Search IGDB" (flavrpromo/gameinfo.py ``search``; an empty box
+    searches the stream's title) whose results are buttons to pick from. Setting it is flavrpromo/games.py
+    ``set_stream``: the stream's own row and "this title means this game" for next time. These boxes are
+    data-nolive: only their buttons act on them.
+  * what a remark is about (owner 2026-11-22: "a good way to get the host to talk a little about the game"):
+    "The remark is about" (the stream, or the game itself) and "Tell the host" (a few words to work in);
+    flavrpromo/recipes.py ``ask_kind`` / ``chunk_facts`` read them (chunk keys ``about`` and ``hint``),
   * the page saves itself and redraws the preview as menus change (flavrpromo/panel.py SCRIPT, "data-live");
     each chunk is a folding card whose bar can be dragged to reorder (↑ ↓ still work), with a colour menu
     for its background (tall.BAND_COLOURS or any colour),
@@ -37,12 +46,14 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from . import article_editor, host_picker, hosts, kobold, recipes, tall
+from . import article_editor, gameinfo, games, host_picker, hosts, kobold, recipes, tall
 from .panel import _e, frame
 
 CHUNKS_KEY, TEMPLATES_KEY = tall.CHUNKS_KEY, tall.TEMPLATES_KEY
 CHAT_MAX = 900              # characters kept of a chat chunk's rows (up to 5 lines; KoboldCpp writes 4)
 NAME_MAX = 40
+KNOWN_MAX = 400             # known games offered as suggestions in the game box (a <datalist>)
+TITLE_PARTS = 3             # parts of a stream's title searched on IGDB when the game box is empty (one request each)
 
 
 def _name(raw: Any) -> str:
@@ -124,7 +135,42 @@ def _figure_controls(c: Dict[str, Any], p: Dict[str, Any]) -> str:
             f'<small>100% is the built-in size; it grows from its feet. Negative numbers move it left / up.</small></div>')
 
 
-def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str]) -> str:
+def _game_box(c: Dict[str, Any], week: Any, store: Any, igdb: bool) -> str:
+    """A stream chunk's game: which one the stream has (with its genres and year once IGDB knew it) and the
+    way to set it by hand: a box to type it (the page's known-games list suggests), "Set game", and the IGDB
+    search with its results as buttons (``c["found"]`` and the words searched ``c["found_q"]``, put there by
+    the "findgame" action; the box keeps those words while the results show). ``igdb``: can IGDB be asked (the Twitch keys are set)? "" until a stream is picked."""
+    cid = c["id"]
+    _, t = tall._tile_of(c.get("ref") or "", week)
+    if t is None:
+        return ""
+    if t.game:
+        info = gameinfo.cached(store, t.game)
+        extra = " · ".join(x for x in (", ".join(info.get("genres") or []), str(info.get("year") or "")) if x)
+        have = f'<b>{_e(t.game)}</b>' + (
+            f' <small>{_e(extra)}</small>' if extra else
+            "" if info or t.game.lower() in games.NON_GAMES else " <small>(no details from IGDB yet: search to pick the right entry)</small>")
+    else:
+        have = '<span class=bad>none found</span> <small>the title didn\'t name a game the bot knows</small>'
+    rows = ""
+    for i, g in enumerate(c.get("found") or []):
+        meta = " · ".join(x for x in (str(g.get("year") or ""), ", ".join(g.get("genres") or [])) if x)
+        rows += (f'<button name=action value="pickgame:{cid}:{i}" class="alt pick"><b>{_e(g.get("name"))}</b>'
+                 + (f' <span>{_e(meta)}</span>' if meta else "")
+                 + (f'<small>{_e(gameinfo._cut(g.get("summary"), 140))}</small>' if g.get("summary") else "") + '</button>')
+    found = f'<div class=found><small>IGDB found these; press the right one:</small>{rows}</div>' if rows else ""
+    search = (f'<button name=action value="findgame:{cid}" class=alt>🔎 Search IGDB</button>' if igdb else "")
+    return (f'<div class=gamebox data-nolive><span class=gamehave>Game: {have}</span>'
+            f'<p><input name="{cid}__gamename" list=known-games value="{_e(c.get("found_q") if rows else t.game)}" placeholder="type the game\'s name" '
+            f'maxlength=100 data-enter="setgame:{cid}" autocomplete=off> '
+            f'<button name=action value="setgame:{cid}" class=alt>Set game</button> {search}</p>'
+            f'<small>Set game keeps it for this stream and for this title next time (an empty box = no game). '
+            + ("Search looks up what is in the box; with the box empty it tries the stream's title."
+               if igdb else "Searching IGDB needs the Twitch keys (TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET).")
+            + f'</small>{found}</div>')
+
+
+def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str], store: Any = None, igdb: bool = False) -> str:
     t, cid = c["type"], c["id"]
     if t == "header":
         return (f'<label>Title <input name="{cid}__title" value="{_e(c.get("title"))}" placeholder="(the article heading)"></label>'
@@ -153,7 +199,8 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str]) -
     if t in ("stream", "game"):
         if t == "stream":
             refs = [("", "(pick a stream)")] + [(x["ref"], x["label"]) for x in tall.tile_choices(week)]
-            pick = f'<label>Stream <select name="{cid}__ref">{_opts(refs, c.get("ref") or "")}</select></label>'
+            pick = (f'<label>Stream <select name="{cid}__ref">{_opts(refs, c.get("ref") or "")}</select></label>'
+                    + (_game_box(c, week, store, igdb) if store is not None else ""))
         else:
             rows = recipes.game_rows(p.get("facts") or {}, week)
             names = [("", "(pick a game)")] + [(r["game"], r["game"]) for r in rows]
@@ -161,8 +208,14 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str]) -
         ticks = "".join(f'<label class=tick><input type=checkbox name="{cid}__show_{k}" value=1'
                         f'{" checked" if tall.shown(c, k) else ""}> {_e(n)}</label>' for k, n in tall.SHOW[t].items())
         more = _picture_menus(c, p) if tall.shown(c, "host") else ""
+        # what ✨ writes about: a reaction, or the game itself; plus a few words of the owner's to work in
+        about = recipes.ABOUT if t == "stream" else recipes.ABOUT_GAME
+        steer = (f'<p class=steer><label>The remark is about <select name="{cid}__about">'
+                 f'{_opts(about.items(), c.get("about") or "")}</select></label> '
+                 f'<label class=hint>Tell the host <input name="{cid}__hint" value="{_e(c.get("hint"))}" maxlength={recipes.HINT_MAX} '
+                 f'placeholder="optional, like “they finally beat the boss”"></label></p>')
         return (pick + f'<p class=ticks><input type=hidden name="{cid}__showed" value=1>{ticks}</p>' + more
-                + _line_field(c, "line", lines, "Remark") + _choices(c)
+                + _line_field(c, "line", lines, "Remark") + _choices(c) + steer
                 + f'<p><button name=action value="ai:{cid}" class=alt>✨ Write the remark</button> '
                 f'<small>(KoboldCpp writes a few from this {t}\'s facts to pick from; the page waits for it)</small></p>')
     if t == "grid":
@@ -197,7 +250,9 @@ def _band_menu(c: Dict[str, Any]) -> str:
             f'title="used when the menu says My own colour">')
 
 
-def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: str = "") -> str:
+def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: str = "", igdb: bool = False) -> str:
+    """The builder page. ``igdb``: can IGDB be searched (poster.game_info is ready)? Shows the game box's
+    search button."""
     chunks = p["talls"][tid]["chunks"]
     used = tall.total(chunks)
     over = used > tall.MAX_H
@@ -224,7 +279,7 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
             f'<button name=action value="dup:{cid}" class=alt>Duplicate</button> '
             f'<button name=action value="del:{cid}" class=alt>Remove</button></span></summary><div class=inner>'
             f'<p><label>Size <select name="{cid}__size">{_opts(sizes, c.get("size", 1))}</select></label> {_band_menu(c)}</p>'
-            f'{_fields(c, p, week, lines)}{_figure_controls(c, p)}'
+            f'{_fields(c, p, week, lines, store, igdb)}{_figure_controls(c, p)}'
             + ("" if i == len(chunks) - 1 else
                f'<p><label>Bottom edge <select name="{cid}__cut">{_opts(tall.CUTS.items(), c.get("cut") or "")}</select></label> '
                f'<label>Slope <select name="{cid}__slope">{_opts([("0", "Gentle"), ("1", "Normal"), ("2", "Steep")], c.get("slope", 1))}'
@@ -253,6 +308,8 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
         f'<button name=action value=savetpl class=alt>Save stack</button></p>'
         + (f'<p><select name=delwhat>{dels}</select> <button name=action value=delsaved class=alt>Delete saved</button></p>'
            if (saved_chunks or templates) else "") + '</section>')
+    # the game boxes' suggestions: every game the bot has seen someone play
+    known = "".join(f'<option value="{_e(g)}">' for g in store.known_games()[:KNOWN_MAX])
     home = f'day{p["talls"][tid]["day"]}' if p["talls"][tid].get("day") is not None else tid   # a day's own tall picture
     back = f'/settings/article?group={quote(p["group"])}&which={quote(p["which"])}#s-{home}'
     pic = f'/settings/tall/picture?d={quote(dkey)}&t={tid}&v={article_editor.stamp(p, tid)}'
@@ -267,11 +324,16 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
             f'redraw on their own.</span> <button type=button class=link data-foldall=close>Fold all</button><button type=button class=link data-foldall=open>Open all</button></p>'
             f'<div class=prev data-swap=always data-swap-id=prev><a href="{pic}" target=_blank title="open full size">'
             f'<img src="{pic}" alt="preview"></a></div>'
-            f'<div class=chunks data-swap=rebuild data-swap-id=chunks data-draglist>{"".join(blocks)}</div>{tools}</form>'
+            f'<div class=chunks data-swap=rebuild data-swap-id=chunks data-draglist>{"".join(blocks)}</div>{tools}'
+            f'<datalist id=known-games>{known}</datalist></form>'
             # ✨ on one chunk waits for KoboldCpp: show it's working instead of a page that looks stuck
             "<script>document.querySelector('form[data-live]').addEventListener('submit',e=>{const b=e.submitter;"
             "if(b&&/^ai:/.test(b.value)){b.textContent='✨ writing… (up to a minute)';"
-            "setTimeout(()=>document.querySelectorAll('button').forEach(x=>x.disabled=true),0)}});</script>")
+            "setTimeout(()=>document.querySelectorAll('button').forEach(x=>x.disabled=true),0)}});"
+            # Enter in a box with data-enter presses that box's own button (the game box: "Set game"), not Save
+            "document.querySelector('form[data-live]').addEventListener('keydown',e=>{const t=e.target;"
+            "if(e.key==='Enter'&&t.dataset&&t.dataset.enter){e.preventDefault();"
+            "const b=t.form.querySelector('button[value=\"'+t.dataset.enter+'\"]');if(b)b.click()}});</script>")
     style = (".meter{height:14px;background:#0e0f14;border-radius:8px;overflow:hidden}.meter div{height:100%;background:#2ae0d4}"
              ".meter.over div{background:#e5312f}.bad{color:#ff7a7a;font-weight:bold}"
              ".prev img{width:100%;border-radius:8px;border:2px solid #3d2a3b;display:block;margin:10px 0}.prev{max-width:520px}"
@@ -279,6 +341,10 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
              ".ticks label.tick,.choices label.tick{margin:2px 14px 2px 0;font-size:15px}.choices label.tick{display:block}"
              ".fig{border-top:1px dashed #3d2a3b;margin-top:8px;padding-top:6px}.fig small{display:block}"
              ".chunk textarea{display:block}.chunk input:not([type]){width:min(480px,90%)}.tools p{margin:8px 0}"
+             ".gamebox{border:1px dashed #3d2a3b;border-radius:8px;padding:8px 10px;margin:6px 0}.gamebox p{margin:6px 0}"
+             ".gamebox small{display:block}.gamehave small{display:inline}.gamebox input:not([type]){width:300px;max-width:55%}"
+             ".found .pick{display:block;width:100%;text-align:left;margin:4px 0;font-weight:400}.found .pick span{opacity:.8}"
+             ".steer label.hint{display:block}.steer input:not([type]){width:min(520px,100%)}"
              "@media(min-width:1100px){.prev{position:sticky;top:8px;float:right;margin-left:20px;width:420px;"
              "max-height:calc(100vh - 16px);overflow:auto}form .chunks,form .tools{margin-right:450px}}")
     return frame("Tall picture", "🧱 Tall picture builder", body, saved, style=style)
@@ -343,10 +409,17 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
         if get("figed"):                        # tick boxes only count when they were on the page
             c["pflip"], c["ppop"] = bool(get("pflip")), bool(get("ppop"))
     if t == "stream" and get("ref") is not None:
-        c["ref"] = get("ref") if get("ref") in {x["ref"] for x in tall.tile_choices(week)} else ""
+        ref = get("ref") if get("ref") in {x["ref"] for x in tall.tile_choices(week)} else ""
+        if ref != (c.get("ref") or ""):
+            c.pop("found", None), c.pop("found_q", None)                # the game search results belonged to the other stream
+        c["ref"] = ref
     if t == "game" and get("game") is not None:
         c["game"] = get("game") if get("game") in {r["game"] for r in recipes.game_rows(p.get("facts") or {}, week)} else ""
     if t in recipes.LINE_TYPES:
+        if get("about") is not None:            # what ✨ writes about (recipes.ask_kind), and the owner's few words
+            c["about"] = "game" if get("about") == "game" else ""
+        if get("hint") is not None:
+            c["hint"] = " ".join(str(get("hint")).split())[:recipes.HINT_MAX]
         if get("showed"):                       # the tick boxes were on the page (a partial post leaves them be)
             c["show"] = [k for k in tall.SHOW[t] if get(f"show_{k}")]
         if get("host") is not None:
@@ -371,8 +444,35 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
         c["line"] = got[int(n)]
 
 
+def _set_game(store: Any, t: Any, game: str) -> str:
+    """Set stream ``t``'s game by hand (flavrpromo/games.py ``set_stream``); the note for the page."""
+    if not t.person_id:
+        return "That stream isn't one of this bot's people, so its game can't be set here."
+    sid = hosts._session_id(store, t) if t.kind in ("past", "live") else None
+    game = games.set_stream(store, t.person_id, t.title, game, sid, live=t.kind == "live")
+    if not game:
+        return f"{t.name}'s stream has no game now."
+    return f"{t.name}'s stream is {game} now" + (", and that title means it from now on." if t.title else ".")
+
+
+async def _find_games(gi: Any, typed: str, title: str) -> Any:
+    """IGDB's games for the game box: what was typed, else the stream's title part by part (TITLE_PARTS
+    requests at most). (rows, what was searched); rows None = IGDB couldn't be asked."""
+    asked = [typed] if typed else games.parts(title)[:TITLE_PARTS]
+    rows, reached = [], False
+    for text in asked:
+        got = await gi.search(text)
+        if got is None:
+            continue
+        reached = True
+        rows += [g for g in got if g["name"].lower() not in {x["name"].lower() for x in rows}]
+    return (rows[:gameinfo.SEARCH_MAX] if reached else None), (typed or "the stream's title")
+
+
 def add_routes(app: web.Application, poster: Any) -> None:
     store = poster.store
+    game_info = lambda: getattr(poster, "game_info", None)       # noqa: E731  (set after the routes, __main__.py)
+    igdb = lambda: bool(getattr(game_info(), "ready", False))    # noqa: E731
 
     def _load(dkey: str, tid: str) -> Dict[str, Any]:
         p = store.get(dkey) if dkey.startswith(article_editor.PREFIX) else None
@@ -389,7 +489,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
         dkey, tid = request.query.get("d", ""), request.query.get("t", "")
         p = _load(dkey, tid)
         week, _ = await article_editor._article(poster, p)
-        return web.Response(text=page(p, dkey, tid, week, store, request.query.get("saved", "")), content_type="text/html")
+        return web.Response(text=page(p, dkey, tid, week, store, request.query.get("saved", ""), igdb()),
+                            content_type="text/html")
 
     async def post(request: web.Request) -> web.Response:
         form = await request.post()
@@ -400,6 +501,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         for c in chunks:
             _apply(c, form, p, week)
         verb, _, cid = str(form.get("action") or "save").partition(":")
+        cid, _, arg = cid.partition(":")        # "pickgame:c3:0": the chunk, then which search result
         i = next((k for k, c in enumerate(chunks) if c["id"] == cid), -1)
         note, anchor = "Saved.", ""
         mine, stacks = dict(store.get(CHUNKS_KEY) or {}), dict(store.get(TEMPLATES_KEY) or {})
@@ -468,6 +570,36 @@ def add_routes(app: web.Application, poster: Any) -> None:
             if got:
                 chunks[i]["choices"], chunks[i]["line"] = got, got[0]
             anchor = cid
+        elif verb in ("setgame", "findgame", "pickgame") and i >= 0 and chunks[i]["type"] == "stream":
+            # the game box of a stream chunk (``_game_box``): typed, searched on IGDB, or picked from the search
+            c, anchor = chunks[i], cid
+            _, t = tall._tile_of(c.get("ref") or "", week)
+            typed = " ".join(str(form.get(f"{cid}__gamename") or "").split())[:100]
+            found = c.get("found") or []
+            if t is None:
+                note = "Pick a stream for that chunk first."
+            elif verb == "setgame":
+                note = _set_game(store, t, typed)
+                c.pop("found", None), c.pop("found_q", None)
+                if typed and igdb():            # its genres and summary, for the chunk and the remarks
+                    await recipes._details(poster, typed)
+            elif verb == "pickgame" and arg.isdigit() and int(arg) < len(found):
+                if game_info() is not None:     # its details, as IGDB gave them with the search
+                    game_info().keep(found[int(arg)])
+                note = _set_game(store, t, found[int(arg)]["name"])
+                c.pop("found", None), c.pop("found_q", None)
+            elif verb == "findgame" and not igdb():
+                note = "Searching IGDB needs the Twitch keys (TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET)."
+            elif verb == "findgame":
+                rows, what = await _find_games(game_info(), typed, t.title)
+                if rows is None:
+                    note = "IGDB couldn't be reached. Try again in a moment, or type the game and press Set game."
+                elif not rows:
+                    c.pop("found", None), c.pop("found_q", None)
+                    note = f"IGDB found no game for {what}. Type the name as its store page spells it and search again."
+                else:
+                    c["found"], c["found_q"] = rows, typed
+                    note = f"IGDB found {len(rows)} for {what}. Press the right one."
         elif verb == "aiall":
             store.put(dkey, p)                  # the posted menus first, then the writer re-reads the draft
             note = ("KoboldCpp is writing the empty remarks; refresh in a minute or two."

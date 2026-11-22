@@ -65,7 +65,7 @@ from . import hosts, schemes
 from .render import clock, hm, logo_data_url
 
 CHUNKS_KEY, TEMPLATES_KEY = "tall_chunks", "tall_templates"   # kv: saved chunks {name: chunk}, saved stacks {name: [chunk]}
-WEEK_FIELDS = ("ref", "game", "line", "lines")   # what belongs to one week: a stack saved as a template drops these
+WEEK_FIELDS = ("ref", "game", "line", "lines", "hint")   # what belongs to one week: a stack saved as a template drops these
 WIDTH = 1600
 MAX_H = 2133                         # px: the tallest picture X shows whole (3:4 at this width)
 # type → (label, heights small / medium / large in px)
@@ -168,6 +168,7 @@ def strip(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out = renumber(chunks)
     for c in out:
         c.pop("choices", None)                    # KoboldCpp's alternatives for this week's remark
+        c.pop("found", None), c.pop("found_q", None)      # the game picker's search (flavrpromo/tall_page.py)
         for k in WEEK_FIELDS:
             if k in c:
                 c[k] = ""

@@ -17,6 +17,14 @@ The remarks (KoboldCpp): ``write_choices`` (the ✨ on a chunk: a few to pick fr
 the game is, history tag), and ``start_lines`` writes every empty remark of a picture in the
 background, one request each (the pattern of flavrpromo/host_picker.py ``start_ai``). What it is
 asked comes from kobold.ASKS "stream" and "game" (editable on the settings page's Asks).
+Two things steer a remark (owner 2026-11-22: "a good way to get the host to talk a little about the game"),
+both set on the chunk in the builder:
+  about   "" = a reaction to the stream / the game being played (the asks above); "game" = the host talks
+          about the game itself (asks "stream_game" / "game_talk"; ``ask_kind``), and the facts then carry
+          the game's longer IGDB details (gameinfo.talk). The details are fetched first when they aren't
+          kept yet (``_details``, through poster.game_info).
+  hint    a few words of the owner's the host should work in ("they finally beat the boss"); it joins the
+          facts as "The producer adds: ...".
 
 Who calls it: flavrpromo/article_editor.py ("+ Add a tall section" and the ✨ on a tall section),
 flavrpromo/tall_page.py (✨ on a chunk, the drawing context). No network of its own except KoboldCpp.
@@ -40,6 +48,10 @@ HEAD_H = tall.height({"type": "header", "size": 0})       # px: the header strip
 FOOT_H = tall.height({"type": "footer", "size": 0})       # px: the sign-off strip (the last picture only)
 LINE_TYPES = ("stream", "game")                           # chunk types that carry a KoboldCpp remark
 CHAT_LINE = 220                                           # characters kept of one chat line (tall_page caps the box)
+ABOUT = {"": "the stream (a reaction)", "game": "the game (what it is, why it's fun)"}     # a stream chunk's ``about``
+ABOUT_GAME = {"": "it being played this week (a reaction)", "game": "the game itself (what it is, why it's fun)"}
+HINT_MAX = 200                                            # characters kept of a chunk's ``hint``
+DETAILS_WAIT = 8.0                                        # seconds a ✨ waits for a game's IGDB details
 _tasks: Dict[str, "asyncio.Task[None]"] = {}              # "<draft key>|<tall id>" → background writer
 
 AI_STATES = {"writing": "writing the remarks… refresh in a minute or two", "done": "the remarks are written",
@@ -74,13 +86,19 @@ def drawing_context(store: Any, p: Dict[str, Any], week: Any, chunks: List[Dict[
     return {"games": rows, "info": {g: gameinfo.cached(store, rows[g]["game"]) for g in used if g in rows}}
 
 
+def _stop(text: str) -> str:
+    """``text`` ending in a full stop, unless it already ends a sentence (IGDB's text usually does)."""
+    return text if text.rstrip().endswith((".", "!", "?", "…")) else text.rstrip() + "."
+
+
 def _about(info: Dict[str, Any]) -> str:
     return "; ".join(x for x in (", ".join(info.get("genres") or []), info.get("summary") or "") if x)
 
 
-def stream_facts(store: Any, week: Any, t: Any) -> str:
+def stream_facts(store: Any, week: Any, t: Any, deep: bool = False) -> str:
     """One stream as the facts sentence KoboldCpp gets (who, game, when, how long, where, its title,
-    what the game is, whether it's new / part n for them)."""
+    what the game is, whether it's new / part n for them). ``deep``: the game at more length
+    (gameinfo.talk), for a remark about the game."""
     d = next((i for i, tiles in enumerate(week.days) if any(x is t for x in tiles)), None)
     day = week.date_of(d).strftime("%A") if d is not None else ""
     when = f"{day} at {clock(t.at, week.tz)}".strip()
@@ -104,26 +122,72 @@ def stream_facts(store: Any, week: Any, t: Any) -> str:
             tag = ""
         parts.append(kobold.games_text([{"game": t.game, "people": [t.name], "streams": 1, "tags": [tag] if tag else []}])
                      .replace("games played: ", "game: "))
+        if deep and gameinfo.talk(info):
+            return ", ".join(parts) + ". " + _stop(gameinfo.talk(info))
         if _about(info):
             parts.append(f"{t.game} is {_about(info)}")
     return ", ".join(parts) + "."
 
 
-def game_facts(row: Dict[str, Any], info: Dict[str, Any]) -> str:
-    """One game of the week as the facts sentence: who played it, how many streams, tags, what it is."""
+def game_facts(row: Dict[str, Any], info: Dict[str, Any], deep: bool = False) -> str:
+    """One game of the week as the facts sentence: who played it, how many streams, tags, what it is
+    (``deep``: at more length, gameinfo.talk)."""
     text = kobold.games_text([row]).replace("games played: ", "game played this week: ")
+    if deep and gameinfo.talk(info):
+        return f"{text}. {_stop(gameinfo.talk(info))}"
     return text + (f". {row['game']} is {_about(info)}" if _about(info) else "") + "."
 
 
-def chunk_facts(store: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any]) -> str:
-    """The facts for a chunk's remark ("" = the chunk points at nothing yet)."""
+def ask_kind(c: Dict[str, Any]) -> str:
+    """Which kobold.ASKS entry writes this chunk's remark: its type, or the game-talk ask when the chunk's
+    "The remark is about" menu says the game."""
+    if c.get("about") == "game":
+        return "stream_game" if c.get("type") == "stream" else "game_talk"
+    return str(c.get("type") or "")
+
+
+def chunk_game(p: Dict[str, Any], week: Any, c: Dict[str, Any]) -> str:
+    """The game a stream / game chunk is about ("" = none: no stream picked, or its game isn't known)."""
     if c.get("type") == "stream":
         _, t = tall._tile_of(c.get("ref") or "", week)
-        return stream_facts(store, week, t) if t is not None else ""
+        return str(getattr(t, "game", "") or "")
+    return str(c.get("game") or "") if c.get("type") == "game" else ""
+
+
+def chunk_facts(store: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any]) -> str:
+    """The facts for a chunk's remark ("" = the chunk points at nothing yet), with the owner's ``hint``."""
+    deep, facts = c.get("about") == "game", ""
+    if c.get("type") == "stream":
+        _, t = tall._tile_of(c.get("ref") or "", week)
+        facts = stream_facts(store, week, t, deep) if t is not None else ""
     if c.get("type") == "game":
         row = next((r for r in game_rows(p.get("facts") or {}, week) if r["game"].lower() == str(c.get("game") or "").lower()), None)
-        return game_facts(row, gameinfo.cached(store, row["game"])) if row else ""
-    return ""
+        facts = game_facts(row, gameinfo.cached(store, row["game"]), deep) if row else ""
+    hint = " ".join(str(c.get("hint") or "").split())[:HINT_MAX]
+    return facts + (f" The producer adds: {_stop(hint)}" if facts and hint else "")
+
+
+async def _details(poster: Any, game: str) -> None:
+    """Make sure ``game``'s IGDB details are kept before a remark is written (one look-up, only when they
+    aren't there or are from before the game-talk details; at most DETAILS_WAIT seconds, never an error)."""
+    gi = getattr(poster, "game_info", None)
+    if gi is None or not game:
+        return
+    try:
+        await asyncio.wait_for(gi.lookup(game), DETAILS_WAIT)
+    except Exception as e:                            # the details are a nice-to-have; the remark goes on without
+        log.info("game details for %s not fetched: %s", game, e)
+
+
+async def _ready(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any]) -> Tuple[str, str]:
+    """(facts, "") for a chunk's remark, or ("", why not) for the page: nothing picked yet, or a remark
+    about the game on a stream whose game isn't known."""
+    game = chunk_game(p, week, c)
+    if c.get("about") == "game" and c.get("type") == "stream" and not game and tall._tile_of(c.get("ref") or "", week)[1] is not None:
+        return "", "This stream has no game yet. Set it under Game on the chunk, then try again."
+    await _details(poster, game)
+    facts = chunk_facts(poster.store, p, week, c)
+    return facts, "" if facts else "Pick a stream or game for that chunk first."
 
 
 async def write_line(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any]) -> Tuple[str, str]:
@@ -131,11 +195,12 @@ async def write_line(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any
     kob = getattr(poster, "kobold", None)
     if kob is None:
         return "", "KoboldCpp isn't set up (Settings → KoboldCpp)."
-    facts = chunk_facts(poster.store, p, week, c)
+    facts, why = await _ready(poster, p, week, c)
     if not facts:
-        return "", "Pick a stream or game for that chunk first."
+        return "", why
     host = c.get("host") if c.get("host") in hosts.HOSTS else p["host"]
-    new = await kob.line(host, kobold.asks()[c["type"]], host_picker.heading_of(p, "review"), facts, kind=c["type"])
+    kind = ask_kind(c)
+    new = await kob.line(host, kobold.asks()[kind], host_picker.heading_of(p, "review"), facts, kind=kind)
     if new is None:
         return "", "KoboldCpp couldn't be reached."
     if not new:
@@ -150,11 +215,12 @@ async def write_choices(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, 
     kob = getattr(poster, "kobold", None)
     if kob is None:
         return [], "KoboldCpp isn't set up (Settings → KoboldCpp)."
-    facts = chunk_facts(poster.store, p, week, c)
+    facts, why = await _ready(poster, p, week, c)
     if not facts:
-        return [], "Pick a stream or game for that chunk first."
+        return [], why
     host = c.get("host") if c.get("host") in hosts.HOSTS else p["host"]
-    new = await kob.lines(host, kobold.asks()[c["type"]], host_picker.heading_of(p, "review"), facts, kind=c["type"])
+    kind = ask_kind(c)
+    new = await kob.lines(host, kobold.asks()[kind], host_picker.heading_of(p, "review"), facts, kind=kind)
     if new is None:
         return [], "KoboldCpp couldn't be reached."
     if not new:
