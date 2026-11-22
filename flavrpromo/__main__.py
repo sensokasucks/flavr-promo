@@ -22,7 +22,7 @@ from pathlib import Path
 import aiohttp
 import discord
 
-from . import article_editor, card_page, command_forms, config, groups, host_picker, hosts, settings_page, tall_page
+from . import article_editor, card_page, collab_page, command_forms, config, groups, host_picker, hosts, settings_page, tall_page
 from .bot import PromoBot
 from .calendar_post import CalendarPoster
 from .import_old import maybe_import
@@ -86,7 +86,8 @@ async def main() -> int:
                                 tz=s.timezone, preview_hour=s.calendar_preview_hour,
                                 ping=lambda: pinger.switches().get("calendar", False), quiet=pinger.quiet_now,
                                 hold=lambda text: pinger.ping("calendar", text), backfill=watcher.backfill,
-                                share_on=lambda: pinger.switches().get("share", False))
+                                share_on=lambda: pinger.switches().get("share", False),
+                                collab_on=lambda: pinger.switches().get("collab", False))
         bot.calendar = poster
         # go-live cards posted as the host (flavrpromo/host_webhooks.py): one channel webhook per host,
         # WebP faces drawn to PNG avatars with the same Chromium; kv hosts_webhook (settings page, Hosts)
@@ -113,6 +114,7 @@ async def main() -> int:
         server.extra_routes.append(lambda app: article_editor.add_routes(app, poster))
         server.extra_routes.append(lambda app: tall_page.add_routes(app, poster))     # tall picture builder
         server.extra_routes.append(lambda app: command_forms.add_routes(app, poster))
+        server.extra_routes.append(lambda app: collab_page.add_routes(app, poster))   # /settings/collabs
         # game genres / summary / store link from IGDB with the Twitch keys (flavrpromo/gameinfo.py)
         bot.game_info = GameInfo(store, checkers["twitch"])
         poster.game_info = bot.game_info             # the tall picture builder's game picker (tall_page.py, recipes.py)

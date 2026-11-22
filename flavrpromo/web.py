@@ -38,6 +38,7 @@ from aiohttp import web
 
 from .calendar import REVIEWS, Tile, Week
 from .calendar_post import CalendarPoster
+from .collabs import with_text
 from .render import logo_data_url, page
 from .share import article, channel_url
 from . import groups
@@ -82,7 +83,9 @@ def ics(weeks: List[Week], now: float) -> str:
             end = t.end if t.kind == "past" and t.end else t.at + 2 * 3600
             what = {"past": "", "live": " (live now)", "scheduled": ""}[t.kind]
             out += ["BEGIN:VEVENT", f"UID:{uid}", f"DTSTAMP:{_stamp(now)}", f"DTSTART:{_stamp(t.at)}", f"DTEND:{_stamp(end)}",
-                    "SUMMARY:" + _ics_text(f"{t.name}: {t.title or t.game or 'stream'}{what}"),
+                    # a confirmed collab (flavrpromo/collabs.py) reads "Lulu (collab with FlaVR): ..."
+                    "SUMMARY:" + _ics_text(f"{t.name}{' (collab ' + with_text(t.collab) + ')' if t.collab else ''}: "
+                                           f"{t.title or t.game or 'stream'}{what}"),
                     "DESCRIPTION:" + _ics_text(" ".join(f"{p}: {u}" for p, u in t.links.items() if u) or t.url)]
             if t.url:
                 out.append("URL:" + t.url)

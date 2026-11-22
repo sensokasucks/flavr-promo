@@ -55,6 +55,9 @@ png, name)`` → True/False, ``dm_owner(text, png=None)`` and ``dm_share(message
 
 Talent channels (flavrpromo/talent.py): ``tick`` also keeps each person's own week card and recap.
 Focus posts (flavrpromo/focus.py): ``tick`` also keeps the automatic "Today" / "This weekend" posts.
+Collabs (flavrpromo/collabs.py): ``tick`` first reads the titles for @mentions (``collab_tick``) and
+DMs the owner each possible collab with Confirm / Not a collab buttons (``dm_collab(text, id)`` on the
+bot, optional); confirmed ones are highlighted on every board, list and share text.
 
 Share (flavrpromo/share.py): after the Sunday post and each review, when the /pings switch
 "share" is on, the owner gets copy-ready text for other Discords and X (held until quiet hours
@@ -73,7 +76,8 @@ from zoneinfo import ZoneInfo
 from .calendar import UPLOAD_ICONS, UPLOAD_NAMES, UPLOADS_HEAD, Tile, Week, build_week, changes, review_range, week_start
 from .share import X_STYLES, article, channel_url, discord_parts, x_posts
 from .render import COVER_H, COVER_W, ImageCache, Screenshotter, cover, day_card, logo_data_url, page
-from . import groups, host_cards, host_picker, hosts, talent
+from . import collabs, groups, host_cards, host_picker, hosts, talent
+from .collabs import with_text
 from .store import Store
 
 log = logging.getLogger("flavrpromo.calendar_post")
@@ -99,8 +103,9 @@ def _hm(sec: float) -> str:
 
 
 def line(t: Tile, recap: bool) -> str:
-    """One stream in the text list under the picture. <t:…:t> shows in each reader's own time zone."""
-    dots = "".join(DOTS.get(p, "") for p in t.platforms)
+    """One stream in the text list under the picture. <t:…:t> shows in each reader's own time zone.
+    A confirmed collab (flavrpromo/collabs.py) gets "🤝 with FlaVR" after the name."""
+    dots = "".join(DOTS.get(p, "") for p in t.platforms) + (f" 🤝 *{_safe(with_text(t.collab), 80)}*" if t.collab else "")
     when = f"<t:{int(t.at)}:t>"
     title = _safe(t.title or t.game)
     if t.kind == "live":
@@ -177,7 +182,8 @@ class CalendarPoster:
                  ping: Optional[Callable[[], bool]] = None, quiet: Optional[Callable[[], bool]] = None,
                  hold: Optional[Callable[[str], Any]] = None, clock: Callable[[], float] = time.time,
                  backfill: Optional[Callable[[float, float], Awaitable[int]]] = None,
-                 share_on: Optional[Callable[[], bool]] = None):
+                 share_on: Optional[Callable[[], bool]] = None,
+                 collab_on: Optional[Callable[[], bool]] = None):
         self.store = store
         self.discord = discord
         self.images = images
@@ -193,6 +199,7 @@ class CalendarPoster:
         self.clock = clock
         self.backfill = backfill                    # Watcher.backfill(start, end, everyone) → sessions added
         self.share_on = share_on or (lambda: False)  # Pinger switch "share"
+        self.collab_ping_on = collab_on or (lambda: False)  # Pinger switch "collab" (possible collab DMs)
         self._shares: List[Tuple[Week, Optional[bytes]]] = []    # waiting for quiet hours to end
         # the bot's own web address on the home network ("http://192.168.0.20:3871"), for the X Article
         # page link in the share DM; set by flavrpromo/__main__.py from WEB_ADDRESS (or found by itself)
@@ -433,12 +440,35 @@ class CalendarPoster:
             for g in groups.keys():         # FlaVR, Friends and any /group add ones
                 if self.store.get(f"calendar_channel.{g}"):
                     await self.refresh(g)
+            await self.collab_tick()        # possible collabs in titles → the owner's Confirm DM (collabs.py)
             await talent.refresh_all(self)  # each talent channel's week card + recap (flavrpromo/talent.py)
             from . import focus             # late import: focus.py imports this module's ``line``
             await focus.tick(self)          # automatic "Today" / "This weekend" posts (/setup day-posts)
             self.images.prune()
             await self.flush_pings()
             await self.flush_shares()
+
+    async def collab_tick(self) -> None:
+        """Look for possible collabs in the titles (flavrpromo/collabs.py ``scan``) and DM the owner each
+        one not yet sent, with Confirm / Not a collab buttons (bot.py ``dm_collab``). Off with the /pings
+        kind "collab"; during quiet hours the DMs wait (rows keep dm_sent 0) and go out after."""
+        try:
+            await asyncio.to_thread(collabs.scan, self.store, self.clock())
+        except Exception:
+            log.exception("collab scan failed")
+            return
+        if not self.collab_ping_on() or self.quiet() or not hasattr(self.discord, "dm_collab"):
+            return
+        now = self.clock()
+        for row in self.store.collabs_between(now - collabs.SCAN_BACK, now + collabs.SCAN_AHEAD, "suggested"):
+            if row.get("dm_sent"):
+                continue
+            try:
+                await self.discord.dm_collab(collabs.dm_text(row), int(row["id"]))
+            except Exception as e:
+                log.info("collab DM failed: %s", e)
+                return
+            self.store.collab_update(int(row["id"]), dm_sent=1)
 
     async def refresh(self, group: str, force_new: bool = False) -> None:
         """Bring one group's posts up to date (see the module notes for the rhythm)."""

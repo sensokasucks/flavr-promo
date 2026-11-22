@@ -32,6 +32,13 @@ Tables
             highlights), one row per video, for the week / weekend reviews' "Also this week" list.
             kind: "video" / "short" / "premiere" / "highlight". Filled by flavrpromo/watcher.py
             (``record_uploads``) from what the platform checks already fetch.
+  collabs   possible and confirmed collab streams (flavrpromo/collabs.py, owner 2026-11-22): one row per
+            stream of one person (person_id + start time ``at``; a scheduled item and the live stream
+            that replaced it share the row because collabs.py matches within MATCH_WINDOW). partners is
+            JSON [{kind, key, name}] (kind "person" / "group" / "handle"); state "suggested" (found in
+            the title, waiting for the owner), "confirmed" (highlighted on the calendars) or "dismissed"
+            (not a collab: never suggested again for that stream). source "auto" = found in the title,
+            "manual" = marked by hand. dm_sent = the owner got the Confirm / Not a collab DM.
 
 Stream Core's chat copy, chat moments and alerts (for /said and the after-stream recap) stayed in
 FlaVR Bot's own database when the bots were split (2026-11-20); flavrpromo/import_old.py leaves them
@@ -177,6 +184,19 @@ CREATE TABLE IF NOT EXISTS segments (
 );
 CREATE INDEX IF NOT EXISTS segments_session ON segments(session_id);
 CREATE INDEX IF NOT EXISTS segments_person ON segments(person_id, started_at);
+CREATE TABLE IF NOT EXISTS collabs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  at REAL NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  partners TEXT NOT NULL DEFAULT '[]',
+  state TEXT NOT NULL DEFAULT 'suggested',
+  source TEXT NOT NULL DEFAULT 'auto',
+  found_at REAL NOT NULL,
+  decided_at REAL,
+  dm_sent INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS collabs_at ON collabs(at);
 """
 
 # Columns added after round 1. A database made by round 1 gets them on start (Store.__init__);
@@ -736,3 +756,62 @@ class Store:
                                   (person_id, a, b)).fetchone()
         times += [float(r["t"]) for r in (row, up) if r and r["t"] is not None]
         return max(times, default=0.0)
+
+    # ── collabs (flavrpromo/collabs.py: found in titles, confirmed by the owner) ──
+    def collab_add(self, person_id: int, at: float, partners: List[Dict[str, Any]], title: str = "",
+                   state: str = "suggested", source: str = "auto", now: Optional[float] = None) -> int:
+        """A new collab row (collabs.scan for a title with a mention, collabs.add for one marked by hand)."""
+        with self._lock:
+            cur = self._db.execute("INSERT INTO collabs(person_id, at, title, partners, state, source, found_at, decided_at) "
+                                   "VALUES(?,?,?,?,?,?,?,?)",
+                                   (person_id, at, title, json.dumps(partners), state, source, now or time.time(),
+                                    (now or time.time()) if state != "suggested" else None))
+            self._db.commit()
+            return int(cur.lastrowid)
+
+    def collab_update(self, cid: int, **fields: Any) -> None:
+        """Change a collab row (state, partners, title, dm_sent, decided_at)."""
+        if not fields:
+            return
+        sets = ", ".join(f"{k}=?" for k in fields)
+        with self._lock:
+            self._db.execute(f"UPDATE collabs SET {sets} WHERE id=?", (*_jsonable(fields).values(), cid))
+            self._db.commit()
+
+    def collab_get(self, cid: int) -> Optional[Dict[str, Any]]:
+        """One collab row with the person's name, partners decoded; None when it's gone."""
+        with self._lock:
+            r = self._db.execute("SELECT c.*, p.name, p.grp FROM collabs c JOIN people p ON p.id=c.person_id "
+                                 "WHERE c.id=?", (cid,)).fetchone()
+        return _collab_row(r) if r else None
+
+    def collab_near(self, person_id: int, at: float, window: float) -> Optional[Dict[str, Any]]:
+        """This person's collab row closest to ``at`` within ``window`` seconds (the same stream)."""
+        with self._lock:
+            r = self._db.execute("SELECT c.*, p.name, p.grp FROM collabs c JOIN people p ON p.id=c.person_id "
+                                 "WHERE c.person_id=? AND ABS(c.at - ?) < ? ORDER BY ABS(c.at - ?) LIMIT 1",
+                                 (person_id, at, window, at)).fetchone()
+        return _collab_row(r) if r else None
+
+    def collabs_between(self, a: float, b: float, state: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Collab rows whose stream starts in [a, b) (optionally one state), oldest first."""
+        with self._lock:
+            q = ("SELECT c.*, p.name, p.grp FROM collabs c JOIN people p ON p.id=c.person_id WHERE c.at >= ? AND c.at < ?"
+                 + (" AND c.state=?" if state else "") + " ORDER BY c.at")
+            return [_collab_row(r) for r in self._db.execute(q, (a, b, state) if state else (a, b))]
+
+    def collab_remove(self, cid: int) -> bool:
+        with self._lock:
+            n = self._db.execute("DELETE FROM collabs WHERE id=?", (cid,)).rowcount
+            self._db.commit()
+        return n > 0
+
+
+def _collab_row(r: sqlite3.Row) -> Dict[str, Any]:
+    """A collabs row as a dict with ``partners`` as a list (stored as JSON text)."""
+    d = dict(r)
+    try:
+        d["partners"] = list(json.loads(d.get("partners") or "[]"))
+    except ValueError:
+        d["partners"] = []
+    return d

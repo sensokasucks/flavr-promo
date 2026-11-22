@@ -8,6 +8,8 @@ Kinds (each can be switched with /pings; the defaults are in KINDS):
            (collected for 10 minutes, sent with the picture; flavrpromo/calendar_post.py)
   share    copy-ready calendar text for other Discords and X, after the Sunday post and the
            Friday / Monday review (flavrpromo/share.py; waits for the end of quiet hours)
+  collab   a possible collab: a stream title @mentions a friend or group (flavrpromo/collabs.py), one DM
+           each with Confirm / Not a collab buttons (waits for the end of quiet hours)
 
 The Stream Core pings (stream started / dropped, Core stopped answering, raids, big tips, the
 after-stream recap, chat moments) and the server's growth DM stay in FlaVR Bot, which has the Core
@@ -40,6 +42,8 @@ KINDS: Dict[str, Tuple[str, bool]] = {
     "friends": ("Friends going live (every 10 minutes, in one message)", False),
     "calendar": ("Calendar changes, with the new picture (every 10 minutes at most)", True),
     "share": ("Copy-ready calendar text for other Discords and X (Sunday + reviews)", True),
+    # flavrpromo/calendar_post.py collab_tick: a title @mentions a friend / group → Confirm / Not a collab
+    "collab": ("Possible collabs to confirm (a title @mentions a friend or group)", True),
 }
 FRIENDS_EVERY = 600.0       # seconds between "Live now: ..." lists
 

@@ -6,6 +6,7 @@ left with a few groups, and a row of tabs across the top of the page for the pag
   Articles   Article editor (flavrpromo/article_editor.py), Line picker (host_picker.py)
   Hosts      Pictures (settings_page.py, pose pools), Host lines (settings_page.py),
              Character cards (card_page.py)
+  Calendar   Collabs (collab_page.py: confirm possible collabs, mark one by hand)
   Bot        Settings (settings_page.py: KoboldCpp, hosts on/off), Commands (command_forms.py)
 
 ``frame`` draws one page in it. Who calls it: settings_page.py (re-exports ``frame``), card_page.py,
@@ -46,6 +47,7 @@ NAV: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = (
                     ("/hosts/pick", "🎙️ Line picker"))),
     ("🎭 Hosts", (("/settings/pictures", "🖼️ Pictures"), ("/settings/lines", "💬 Host lines"),
                  ("/settings/cards", "🧾 Character cards"))),
+    ("🗓️ Calendar", (("/settings/collabs", "🤝 Collabs"),)),          # collab_page.py
     ("⚙️ Bot", (("/settings", "⚙️ Settings"), ("/settings/commands", "⌨️ Commands"))),
 )
 PAGES = tuple(p for _, pages in NAV for p in pages)         # flat list (older callers)
