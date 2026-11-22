@@ -11,7 +11,9 @@ saving) is flavrpromo/tall_page.py, and the article editor adds a tall picture a
 A chunk is a dict: {"id", "type", "size" (0 small, 1 medium, 2 large), "cut", "slope", "band", ...fields of its type}.
 ``band`` is the chunk's own background colour (a BAND_COLOURS key or "#rrggbb"; "" = automatic).
 ``cut`` is the shape of the chunk's bottom edge: "" straight, "down" slanting down to the right, "up"
-slanting down to the left (owner 2026-11-21: diagonal cuts "add a more fun feel"); ``slope`` 0 / 1 / 2 is
+slanting down to the left, "v" / "peak" a corner in the middle, and (owner 2026-11-22) "zig" a zigzag,
+"wave" a wave (``teeth`` = how many teeth / waves), "arc" / "hill" one curve dipping / rising in the middle
+(drawn from the sampled points of ``edge``). Owner 2026-11-21: diagonal cuts "add a more fun feel". ``slope`` 0 / 1 / 2 is
 how steep (SLOPES px). A chunk with a cut, and the one under it, get their own background colour (BANDS)
 and a stripe is drawn along the seam; the stack's height does not change (the cut eats into the chunk's
 own bottom, so its content gets a little less room).
@@ -53,6 +55,7 @@ from __future__ import annotations
 
 import copy
 import html
+import math
 from typing import Any, Dict, List, Tuple
 
 from . import hosts
@@ -98,7 +101,11 @@ PIC_NUMBERS = {"pscale": (30, 400, 100), "prot": (-180, 180, 0), "px": (-1600, 1
 TAG_WORDS = {"new": "NEW GAME", "staple": "STAPLE", "back": "BACK AGAIN"}     # "part:4" reads PART 4
 SIDES = {"left": "Host on the left", "right": "Host on the right"}
 CUTS = {"": "Straight edge", "down": "Slants down to the right ↘", "up": "Slants down to the left ↙",
-        "v": "V shape ⌄ (dips in the middle)", "peak": "Peak ⌃ (rises in the middle)"}
+        "v": "V shape ⌄ (dips in the middle)", "peak": "Peak ⌃ (rises in the middle)",
+        "zig": "Zigzag ⩘ (teeth)", "wave": "Wave ∿", "arc": "Curve dipping in the middle ◡",
+        "hill": "Curve rising in the middle ◠"}
+SHAPED = ("zig", "wave", "arc", "hill")   # cuts drawn from sampled points (``edge``), not from two or three corners
+TEETH = {"zig": (2, 24, 8), "wave": (1, 12, 3)}    # ``teeth``: how many teeth / waves across the width (min, max, default)
 V_AT = 53                            # % of the width where a V / peak turns
 SLOPES = (60, 110, 170)              # px the slanted edge drops over the 1600 px width: gentle / normal / steep
 BANDS = {                            # background colours of chunks next to a cut (taken in turn)
@@ -324,13 +331,41 @@ def tile_choices(week: Any) -> List[Dict[str, str]]:
 def cut_depth(chunks: List[Dict[str, Any]], i: int) -> int:
     """How many px the bottom edge of chunk ``i`` drops (0 = straight or the last chunk; at most 40% of its height)."""
     c = chunks[i]
-    if i == len(chunks) - 1 or c.get("cut") not in ("down", "up", "v", "peak"):
+    if i == len(chunks) - 1 or c.get("cut") not in ("down", "up", "v", "peak") + SHAPED:
         return 0
     try:
         d = SLOPES[max(0, min(2, int(c.get("slope", 1))))]
     except (TypeError, ValueError):
         d = SLOPES[1]
     return max(0, min(d, int(height(c) * 0.4)))          # the content keeps at least 60% of the chunk
+
+
+def teeth(c: Dict[str, Any]) -> int:
+    """How many teeth (zigzag) or waves the chunk's bottom edge has; 0 for the other cuts."""
+    if c.get("cut") not in TEETH:
+        return 0
+    lo, hi, default = TEETH[c["cut"]]
+    try:
+        return max(lo, min(hi, int(c.get("teeth") or default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def edge(kind: str, d: int, n: int = 0) -> List[Tuple[float, float]]:
+    """A zigzag / curved bottom edge (owner 2026-11-22) as points left to right: (x in % of the width, how
+    many px the edge is above the chunk's bottom line there, 0..d). ``n``: teeth or waves (``teeth``).
+    zig: sharp teeth; wave: a smooth sine; arc: one curve lowest in the middle; hill: highest in the middle."""
+    if kind == "zig":
+        n = n or TEETH["zig"][2]
+        return [(100 * i / (2 * n), float(d if i % 2 == 0 else 0)) for i in range(2 * n + 1)]
+    steps = 16 * (n or TEETH["wave"][2]) if kind == "wave" else 48
+    out = []
+    for i in range(steps + 1):
+        x = i / steps
+        up = (d / 2 * (1 + math.cos(2 * math.pi * (n or TEETH["wave"][2]) * x)) if kind == "wave"
+              else d * (1 - math.sin(math.pi * x)) if kind == "arc" else d * math.sin(math.pi * x))
+        out.append((100 * x, round(up, 1)))
+    return out
 
 
 def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
@@ -502,12 +537,14 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
         clip = ""
         if d:
             kind = c.get("cut")
-            poly = {"down": f"0 0,100% 0,100% 100%,0 calc(100% - {d}px)",
+            pts = edge(kind, d, teeth(c)) if kind in SHAPED else []
+            poly = ("0 0,100% 0," + ",".join(f"{x:g}% calc(100% - {up:g}px)" for x, up in reversed(pts))) if pts else \
+                   {"down": f"0 0,100% 0,100% 100%,0 calc(100% - {d}px)",
                     "up": f"0 0,100% 0,100% calc(100% - {d}px),0 100%",
                     "v": f"0 0,100% 0,100% calc(100% - {d}px),{V_AT}% 100%,0 calc(100% - {d}px)",
                     "peak": f"0 0,100% 0,100% 100%,{V_AT}% calc(100% - {d}px),0 100%"}[kind]
             clip = f"clip-path:polygon({poly});"
-            seams.append((y + h, d, kind))
+            seams.append((y + h, d, kind, pts))
         # the host picture: standing on the chunk's bottom edge, turned / scaled around its feet. Inside the
         # chunk it is cut off at the chunk's edges; with ``ppop`` it goes in a layer over the whole picture.
         fig, inside = figure(c, ctx, h - d), ""
@@ -524,14 +561,15 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
                     f'height:{h - d}px;overflow:hidden">{_draw(c, ctx, h - d)}{inside}</div></div>')
         y += h
     stripes = ""
-    for bottom, d, kind in seams:
+    for bottom, d, kind, shaped in seams:
         mid = int(WIDTH * V_AT / 100)
-        pts = {"down": [(0, bottom - d), (WIDTH, bottom)], "up": [(0, bottom), (WIDTH, bottom - d)],
+        pts = [(round(WIDTH * x / 100, 1), round(bottom - up, 1)) for x, up in shaped] if shaped else \
+              {"down": [(0, bottom - d), (WIDTH, bottom)], "up": [(0, bottom), (WIDTH, bottom - d)],
                "v": [(0, bottom - d), (mid, bottom), (WIDTH, bottom - d)],
                "peak": [(0, bottom), (mid, bottom - d), (WIDTH, bottom)]}[kind]
-        line = " ".join(f"{x},{yy}" for x, yy in pts)
-        stripes += (f'<polyline points="{line}" fill="none" stroke="#fff" stroke-width="18"/>'
-                    f'<polyline points="{line}" fill="none" stroke="{th["accent"]}" stroke-width="7"/>')
+        line = " ".join(f"{x:g},{yy:g}" for x, yy in pts)
+        stripes += (f'<polyline points="{line}" fill="none" stroke="#fff" stroke-width="18" stroke-linejoin="round"/>'
+                    f'<polyline points="{line}" fill="none" stroke="{th["accent"]}" stroke-width="7" stroke-linejoin="round"/>')
     svg = (f'<svg style="position:absolute;left:0;top:0;z-index:99" width="{WIDTH}" height="{max(1, y)}" '
            f'viewBox="0 0 {WIDTH} {max(1, y)}">{stripes}</svg>') if stripes else ""
     return (f'<!doctype html><html><head><meta charset=utf-8><style>*{{box-sizing:border-box;margin:0}}'
@@ -540,5 +578,5 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
             f'<div style="position:absolute;left:0;top:0;z-index:100">{pops}</div></body></html>')
 
 
-__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
+__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SHAPED", "TEETH", "teeth", "edge", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
            "tile_choices"]

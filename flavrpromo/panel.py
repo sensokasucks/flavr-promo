@@ -23,7 +23,7 @@ drag to reorder, "add the GUI changes to the other parts of the webpage"):
     / tick box change, e.g. the list of cards) with the same part of the answer (matched by
     ``data-swap-id``). ``data-nolive`` on an element keeps its fields out of it;
   * drag to reorder: the ``<details id>`` children of a ``data-draglist`` element can be dragged by
-    their summary; the new order goes in the form's hidden ``order`` field (ids, comma separated) and
+    their summary with a mouse, or by holding the ⠿ grip and sliding on a touch screen; the new order goes in the form's hidden ``order`` field (ids, comma separated) and
     is posted with action=order. A ``data-foldall="open"`` / ``"close"`` button opens / folds every card. No password, like the rest of port 3871 (home
 network only; never forward the port).
 """
@@ -87,7 +87,7 @@ STYLE = (
     "details.card>.inner{padding:4px 14px 12px;border-top:1px solid var(--line)}"
     "summary .what{color:#aab;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46%}"
     "summary .acts{margin-left:auto;display:flex;gap:6px;align-items:center}summary .acts button{padding:5px 10px}"
-    ".grip{cursor:grab;color:#889;font-size:18px}details.dragging{opacity:.4}"
+    ".grip{cursor:grab;color:#889;font-size:18px;touch-action:none;padding:4px 6px;margin:-4px -6px}details.dragging{opacity:.4}"
     "details.dropbefore{box-shadow:0 -4px 0 var(--teal)}details.dropafter{box-shadow:0 4px 0 var(--teal)}"
     ".livestatus{color:#aab;font-size:14px;margin-left:8px}input[type=color]{width:44px!important;height:30px;padding:0;"
     "border:0;background:none;vertical-align:middle}button.link{background:none;color:var(--teal);padding:2px 6px;font-weight:normal}"
@@ -113,6 +113,14 @@ function cards(root){                       // details.card: open / closed as la
 }
 function clearMarks(){document.querySelectorAll('.dropbefore,.dropafter').forEach(x=>x.classList.remove('dropbefore','dropafter'))}
 let dragged=null;
+function place(list,d){                      // put the dragged card before / after card d (as marked) and post the order
+  list.insertBefore(dragged,d.classList.contains('dropafter')?d.nextSibling:d);clearMarks();
+  const form=list.closest('form');
+  if(form&&form.elements.order){
+    form.elements.order.value=[...list.children].filter(x=>x.matches('details[id]')).map(x=>x.id).join(',');
+    if(form._send)form._send('order',true);else{const b=document.createElement('input');b.type='hidden';b.name='action';b.value='order';form.appendChild(b);form.submit()}
+  }
+}
 function drags(root){                       // [data-draglist] > details[id]: drag by the summary
   const lists=[...root.querySelectorAll('[data-draglist]')];
   if(root.matches&&root.matches('[data-draglist]'))lists.push(root);
@@ -130,14 +138,26 @@ function drags(root){                       // [data-draglist] > details[id]: dr
       });
       d.addEventListener('drop',e=>{
         if(!dragged||dragged===d||dragged.parentNode!==list)return;
-        e.preventDefault();
-        list.insertBefore(dragged,d.classList.contains('dropafter')?d.nextSibling:d);clearMarks();
-        const form=list.closest('form');
-        if(form&&form.elements.order){
-          form.elements.order.value=[...list.children].filter(x=>x.matches('details[id]')).map(x=>x.id).join(',');
-          if(form._send)form._send('order',true);else{const b=document.createElement('input');b.type='hidden';b.name='action';b.value='order';form.appendChild(b);form.submit()}
-        }
+        e.preventDefault();place(list,d);
       });
+      // the same by touch (phones, tablets): hold the grip ⠿ and slide; the card under the finger gets the mark
+      const grip=s.querySelector('.grip');
+      if(grip){
+        let over=null;
+        grip.addEventListener('touchstart',e=>{dragged=d;over=null;d.classList.add('dragging');e.preventDefault()},{passive:false});
+        grip.addEventListener('touchmove',e=>{
+          if(dragged!==d)return;
+          e.preventDefault();
+          const t=e.touches[0],el=document.elementFromPoint(t.clientX,t.clientY);
+          const o=el&&el.closest('details[id]');clearMarks();over=null;
+          if(!o||o===d||o.parentNode!==list)return;
+          const r=o.getBoundingClientRect();
+          o.classList.add(t.clientY>r.top+r.height/2?'dropafter':'dropbefore');over=o;
+          if(t.clientY<60)window.scrollBy(0,-18);else if(t.clientY>window.innerHeight-60)window.scrollBy(0,18);
+        },{passive:false});
+        const end=()=>{if(dragged!==d)return;if(over)place(list,over);d.classList.remove('dragging');clearMarks();dragged=null;over=null};
+        grip.addEventListener('touchend',end);grip.addEventListener('touchcancel',end);
+      }
     });
   });
 }

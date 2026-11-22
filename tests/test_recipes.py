@@ -27,7 +27,7 @@ class FakeKobold:
 
 def test_long_lists_split_into_pictures_that_fit():
     items = [{"type": "stream", "ref": f"d0:{n}", "line": ""} for n in range(14)]
-    out = recipes._pictures("Friday, in detail", ["Nov 20"], items, diagonal=True)
+    out = recipes._pictures("Friday, in detail", ["Nov 20"], items, "diagonal")
     assert len(out) == 2 and sum(1 for _, ch in out for c in ch if c["type"] == "stream") == 14
     for title, chunks in out:
         assert tall.total(chunks) <= tall.MAX_H and "of 2" in title
@@ -35,9 +35,9 @@ def test_long_lists_split_into_pictures_that_fit():
         assert chunks[0]["type"] == "header" and chunks[0]["sub"].startswith("Nov 20 · part ")
         assert all(c["cut"] in ("down", "up") for c in chunks[:-1]) and not chunks[-1].get("cut")
     assert out[-1][1][-1]["type"] == "footer" and out[0][1][-1]["type"] == "stream"   # sign-off on the last only
-    few = recipes._pictures("Games this week", [""], [{"type": "game", "game": "A"}] * 3, diagonal=False)
+    few = recipes._pictures("Games this week", [""], [{"type": "game", "game": "A"}] * 3, "")
     assert len(few) == 1 and few[0][0] == "Games this week" and few[0][1][1]["size"] == 1
-    eight = recipes._pictures("Games this week", [""], [{"type": "game", "game": "A"}] * 8, diagonal=False)
+    eight = recipes._pictures("Games this week", [""], [{"type": "game", "game": "A"}] * 8, "")
     assert len(eight) == 1 and eight[0][1][1]["size"] == 0 and tall.total(eight[0][1]) <= tall.MAX_H
 
 

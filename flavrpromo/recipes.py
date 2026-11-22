@@ -210,10 +210,13 @@ async def _write_all(poster: Any, dkey: str, tid: str, week: Any) -> None:
 
 # ---- the recipes ---------------------------------------------------------------------------------
 
-def _pictures(title: str, subs: List[str], items: List[Dict[str, Any]], diagonal: bool) -> List[Tuple[str, List[Dict[str, Any]]]]:
+SEAMS = {"": "straight seams", "diagonal": "diagonal seams", "zig": "zigzag seams", "wave": "wavy seams"}
+
+
+def _pictures(title: str, subs: List[str], items: List[Dict[str, Any]], seams: Any) -> List[Tuple[str, List[Dict[str, Any]]]]:
     """Split ``items`` (stream / game chunks, no ids yet) over as few pictures as fit tall.MAX_H, in
     balanced groups, each with a header and, on the last one, a sign-off strip. Medium size first; small
-    when that avoids a split. ``subs``: the header line under the title (one per picture, or one for all)."""
+    when that avoids a split. ``seams``: a SEAMS key (True = "diagonal"). ``subs``: the header line under the title (one per picture, or one for all)."""
     room = lambda size: (tall.MAX_H - HEAD_H - FOOT_H) // tall.height({"type": items[0]["type"], "size": size})  # noqa: E731
     size = 1 if len(items) <= room(1) else 0
     count = max(1, math.ceil(len(items) / max(1, room(size))))
@@ -227,14 +230,14 @@ def _pictures(title: str, subs: List[str], items: List[Dict[str, Any]], diagonal
         chunks = [{"type": "header", "size": 0, "title": title, "sub": sub}] + part
         if n == count - 1:
             chunks.append({"type": "footer", "size": 0, "host": "", "kind": "chibi_happy", "var": "", "line": ""})
-        if diagonal:                                  # alternating slants, gentle, never on the last chunk
-            for i, c in enumerate(chunks[:-1]):
-                c["cut"], c["slope"] = ("down", "up")[i % 2], 0
+        seams = "diagonal" if seams is True else (seams if seams in SEAMS else "")      # True: the old yes / no
+        for i, c in enumerate(chunks[:-1] if seams else []):                           # gentle, never on the last chunk
+            c["cut"], c["slope"] = (("down", "up")[i % 2] if seams == "diagonal" else seams), 0
         out.append((title if count == 1 else f"{title} ({n + 1} of {count})", tall.renumber(chunks)))
     return out
 
 
-def build(recipe: str, p: Dict[str, Any], week: Any, arg: str = "", diagonal: bool = False
+def build(recipe: str, p: Dict[str, Any], week: Any, arg: str = "", diagonal: Any = False
           ) -> Tuple[List[Tuple[str, List[Dict[str, Any]]]], str]:
     """([(section title, chunks)], error text). ``arg``: the day number for "day", the person's name
     for "person". Empty list + a message when the week has nothing for that recipe."""
@@ -309,5 +312,5 @@ def add_to_draft(p: Dict[str, Any], built: List[Tuple[str, List[Dict[str, Any]]]
     return ids
 
 
-__all__ = ["RECIPES", "build", "fill", "people", "add_to_draft", "write_line", "write_choices", "start_lines", "game_rows", "drawing_context",
+__all__ = ["RECIPES", "SEAMS", "build", "fill", "people", "add_to_draft", "write_line", "write_choices", "start_lines", "game_rows", "drawing_context",
            "chunk_facts", "stream_facts", "game_facts", "AI_STATES", "LINE_TYPES", "next_tall_id"]
