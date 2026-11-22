@@ -17,10 +17,12 @@ Tabs and sections (each its own form; a save redirects back with a note):
               long the Sunday board waits for the week-ahead picks (kv host_preview_wait, hours); the
               recap picture on ended go-live cards (kv host_recap_card, default on); boards in the
               host's look (kv host_board, default on).
-  Pictures    (/settings/pictures) every picture kind for both hosts with a preview, upload to
-              replace the main one (the same as /host picture) and "back to built-in" (deletes the
-              upload), plus a POOL of extra pictures per kind (add several at once, remove one;
-              flavrpromo/hosts.py ``variants``): posts pick from the pool at random.
+  Pictures    (/settings/pictures) a folding card per host, in it the picture kinds in groups
+              (PICTURE_GROUPS: regular poses, chibi, heads), each kind a row of thumbnails: the main
+              picture (replace it, the same as /host picture; "back to built-in" deletes the upload)
+              plus its POOL of extra pictures (add several at once, drop files on the row, remove
+              one; flavrpromo/hosts.py ``variants``): posts pick from the pool at random. The forms
+              are "quick forms" (flavrpromo/panel.py): with the script the row updates in place.
   Lines       (/settings/lines) every template slot for both hosts as a text box, one line per row; a blank that
               isn't in hosts.BLANKS is refused, an emptied box goes back to the built-in lines.
               Saved in kv "host_templates" (flavrpromo/hosts.py ``load_overrides``).
@@ -115,49 +117,119 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
     return frame("FlaVR Promo settings", "⚙️ Settings", kob + hst, saved)
 
 
+# The Pictures tab's groups inside each host's card: (id, heading, picture kinds). Every kind of
+# hosts.KINDS must be in exactly one group (tests/test_settings_page.py checks it).
+PICTURE_GROUPS = (
+    ("poses", "Regular poses", ("happy", "pointing", "sleepy", "desk")),
+    ("chibi", "Chibi", ("chibi_happy", "chibi_pointing", "chibi_sleepy", "chibi_desk")),
+    ("heads", "Heads (one picture each)", ("head", "chibi_head")),
+)
+_ACCEPT = ".png,.jpg,.jpeg,.webp"
+
+# the Pictures tab's own CSS (the shared look, the toast and the drop mark are in flavrpromo/panel.py STYLE)
+_PICTURES_STYLE = (
+    "details.sub{background:#231521;margin:8px 0}details.sub>summary{padding:7px 12px}"
+    # the kinds of a group sit side by side while there is room (a kind with many pictures takes its own line)
+    "details.sub>.inner{display:flex;flex-wrap:wrap;gap:4px 30px}.kind{padding:8px 0;max-width:100%}"
+    ".kindhead b{text-transform:capitalize}.kindhead small{display:inline;margin-left:8px}"
+    ".strip{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;align-items:flex-start}"
+    ".thumb{position:relative;width:104px;margin:0}.thumb img,.thumb .none,.tile{width:104px;height:104px;"
+    "object-fit:contain;background:#0e0f14;border-radius:8px;border:2px solid transparent;display:flex;"
+    "align-items:center;justify-content:center;color:#778}.thumb.mainpic img,.thumb.mainpic .none{border-color:var(--teal)}"
+    ".thumb a{display:block}.thumb .tag{display:block;font-size:12px;color:#aab;text-align:center;margin-top:2px}"
+    ".thumb .x{position:absolute;top:4px;right:4px;padding:0 7px;line-height:22px;background:#000a}"
+    ".thumb .x:hover{background:var(--pink)}.thumb .row{display:flex;gap:4px;justify-content:center;flex-wrap:wrap}"
+    ".thumb .row button,.thumb .row label{font-size:12px;margin:0;padding:1px 4px}"
+    ".pick{color:var(--teal);cursor:pointer}.pick:hover{text-decoration:underline}"
+    ".tile{flex-direction:column;border:2px dashed #4a3547;color:var(--teal);font-size:28px;margin:0;cursor:pointer}"
+    ".tile small{font-size:12px;color:#aab}.tile:hover{border-color:var(--teal)}"
+    # with the script a chosen file uploads at once, so the file boxes themselves are hidden behind their labels
+    ".js .pick input[type=file]{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}"
+    ".pick input[type=file]{width:100px;font-size:11px}")
+
+
+def _kind_row(key: str, kind: str, state: str) -> str:
+    """One picture kind of one host on the Pictures tab: its main picture (replace / back to built-in)
+    and, for a pooled kind, the extra pictures (remove) and an "add" tile. ``state`` = hosts.pictures'
+    "yours" / "built-in" / "". Everything here is a quick form (flavrpromo/panel.py): it also works as a
+    plain form post, and with the script the row is swapped in place (data-swap-id pool-<host>-<kind>)."""
+    hidden = f'<input type=hidden name=host value={key}><input type=hidden name=kind value={kind}>'
+    url = f"/settings/picture/{key}/{kind}"
+
+    def stamp(path: Any) -> int:           # in the picture's URL, so a replaced picture is fetched again
+        try:
+            return path.stat().st_mtime_ns // 1_000_000
+        except OSError:
+            return 0
+
+    every = hosts.variants(key, kind) if kind in hosts.POOLED else []
+    extra = [(v, path) for v, path in every if v != "main"]
+    main_path = hosts.exact(key, kind)
+    main_img = (f'<a href="{url}?t={stamp(main_path)}" target=_blank title="Open the picture">'
+                f'<img src="{url}?t={stamp(main_path)}" loading=lazy alt=""></a>'
+                if main_path is not None else '<div class=none>none</div>')
+    reset = ('<button name=action value=reset class=link title="Delete your upload and use the built-in picture '
+             'again">↺ Built-in</button>' if state == "yours" else "")
+    main = (f'<form class="thumb mainpic" data-quick data-dropzone="main-{key}-{kind}" method=post action=/settings/picture '
+            f'enctype=multipart/form-data>{hidden}{main_img}<span class=tag>main · {_e(state or "missing")}</span>'
+            f'<span class=row><label class=pick>Replace<input type=file name=file id="main-{key}-{kind}" '
+            f'accept="{_ACCEPT}"></label><button name=action value=upload class=nojs>Upload</button>{reset}</span></form>')
+    thumbs = "".join(
+        f'<form class=thumb data-quick method=post action=/settings/pool>{hidden}<input type=hidden name=vid value="{_e(v)}">'
+        f'<a href="{url}?v={_e(v)}&amp;t={stamp(path)}" target=_blank title="Open the picture">'
+        f'<img src="{url}?v={_e(v)}&amp;t={stamp(path)}" loading=lazy alt=""></a>'
+        f'<button name=action value=remove class=x title="Remove this picture from the pool">✕</button></form>'
+        for v, path in extra)
+    # the group's heading already says "chibi" for the chibi poses; the two heads share a group, so they keep it
+    name = (kind if kind not in hosts.POOLED else kind.replace("chibi_", "")).replace("_", " ")
+    if kind not in hosts.POOLED:       # heads stay single: the go-live avatar must not change at random (hosts.py)
+        count, add, zone = "single picture", "", f"main-{key}-{kind}"
+    else:
+        n = len(extra) + (1 if main_path is not None else 0)
+        count = (f'{n} of {hosts.POOL_MAX + 1}' + (" · a post picks one at random" if n > 1 else ""))
+        full = len(extra) >= hosts.POOL_MAX
+        add = "" if full else (
+            f'<form class=thumb data-quick method=post action=/settings/pool enctype=multipart/form-data>{hidden}'
+            f'<label class="tile pick" title="Add pictures to this pool (or drop them here)">＋<small>Add pictures</small>'
+            f'<input type=file name=file id="add-{key}-{kind}" accept="{_ACCEPT}" multiple></label>'
+            f'<button name=action value=add class=nojs>Add to pool</button></form>')
+        zone = "" if full else f"add-{key}-{kind}"
+        if full:
+            count += " · full, remove one to add another"
+    return (f'<div class=kind data-swap=rebuild data-swap-id="pool-{key}-{kind}">'
+            f'<div{f" data-dropzone={zone}" if zone else ""}><div class=kindhead><b>{_e(name)}</b>'
+            f'<small>{_e(count)}</small></div><div class=strip>{main}{thumbs}{add}</div></div></div>')
+
+
 def pictures_page(poster: Any, saved: str = "") -> str:
-    """Hosts > Pictures: every picture kind of both hosts as a POOL (flavrpromo/hosts.py): the main
-    picture (replace / back to built-in) plus extra pictures to add and remove; the system picks one
-    of the pool at random, and the article editor lets you pin one."""
-    cells = []
+    """Hosts > Pictures (owner 2026-11-22: "go ahead and tidy up the pictures pages"): one folding card
+    per host, inside it a folding group per PICTURE_GROUPS entry, inside that one row per picture kind
+    (``_kind_row``): the kind's POOL (flavrpromo/hosts.py) as thumbnails. The main picture can be
+    replaced or put back to the built-in one, extra pictures added and removed; the system picks one of
+    a pool at random, and the article editor lets you pin one. With the panel script nothing reloads:
+    a chosen or dropped file uploads at once and only that row is redrawn."""
+    cards = []
     for key, h in hosts.HOSTS.items():
         have = hosts.pictures(key)
-        for kind in hosts.KINDS:
-            src = f"/settings/picture/{key}/{kind}" if have[kind] else ""
-            img = f'<img src="{src}" loading=lazy alt="">' if src else '<div class=none>none</div>'
-            reset = '<button name=action value=reset>Back to built-in</button>' if have[kind] == "yours" else ""
-            pool = ""
-            if kind in hosts.POOLED:
-                extra = hosts.variants(key, kind)[1:] if have[kind] else [
-                    v for v in hosts.variants(key, kind) if v[0] != "main"]
-                thumbs = "".join(
-                    f'<form class=thumb method=post action=/settings/pool><input type=hidden name=host value={key}>'
-                    f'<input type=hidden name=kind value={kind}><input type=hidden name=vid value="{_e(v)}">'
-                    f'<img src="/settings/picture/{key}/{kind}?v={_e(v)}" loading=lazy alt="">'
-                    f'<button name=action value=remove class=alt title="Remove this picture">✕</button></form>'
-                    for v, _ in extra)
-                pool = (f'<div class=pool><small>Pool: {1 + len(extra) if have[kind] else len(extra)} '
-                        f'picture{"" if len(extra) == 0 and have[kind] else "s"}'
-                        f'{" (random pick)" if extra else ""}</small>{thumbs}'
-                        f'<form method=post action=/settings/pool enctype=multipart/form-data>'
-                        f'<input type=hidden name=host value={key}><input type=hidden name=kind value={kind}>'
-                        f'<input type=file name=file accept=".png,.jpg,.jpeg,.webp" multiple>'
-                        f'<button name=action value=add>Add to pool</button></form></div>')
-            cells.append(f'<div class=pic><form method=post action=/settings/picture enctype=multipart/form-data>'
-                         f'<input type=hidden name=host value={key}><input type=hidden name=kind value={kind}>'
-                         f'{img}<b>{_e(h["name"])}: {_e(kind.replace("_", " "))}</b>'
-                         f'<small>main picture: {_e(have[kind] or "missing")}</small>'
-                         f'<input type=file name=file accept=".png,.jpg,.jpeg,.webp">'
-                         f'<button name=action value=upload>Replace main</button> {reset}</form>{pool}</div>')
-    body = (f'<section id=pictures><p class=help>PNG, JPG or WebP up to 8 MB; see-through PNG / WebP is best. '
-            f'"Replace main" swaps the main picture of that kind. <b>Add to pool</b> adds more pictures to the '
-            f'same kind (up to {hosts.POOL_MAX}): a post or article picks one of them at random, and in the '
-            f'article editor you can choose a specific one or re-roll. Head pictures (the go-live avatar) stay '
-            f'single.</p><div class=grid>{"".join(cells)}</div></section>')
-    return frame("FlaVR Promo pictures", "🖼️ Pictures", body, saved, style=(
-        ".pool{margin-top:8px;border-top:1px solid #3d2a3b;padding-top:6px}"
-        ".thumb{display:inline-block;position:relative;margin:2px}.thumb img{width:64px!important;height:64px!important}"
-        ".thumb button{position:absolute;top:2px;right:2px;padding:0 6px}"))
+        total = sum(len(hosts.variants(key, k)) if k in hosts.POOLED else (1 if have[k] else 0) for k in hosts.KINDS)
+        own = sum(1 for k in hosts.KINDS if have[k] == "yours") + sum(
+            len([v for v, _ in hosts.variants(key, k) if v != "main"]) for k in hosts.POOLED)
+        groups = "".join(
+            f'<details class="card sub" id="pics-{key}-{gid}" open><summary><b>{_e(title)}</b></summary>'
+            f'<div class=inner>{"".join(_kind_row(key, k, have[k]) for k in kinds)}</div></details>'
+            for gid, title, kinds in PICTURE_GROUPS)
+        cards.append(
+            f'<details class=card id="pics-{key}" open><summary><b>{_e(h["emoji"])} {_e(h["name"])}</b>'
+            f'<span class=what data-swap=rebuild data-swap-id="count-{key}">{total} picture{"" if total == 1 else "s"}'
+            f' · {own} your own</span></summary><div class=inner>{groups}</div></details>')
+    body = (f'<p class=help>PNG, JPG or WebP up to 8 MB; see-through PNG / WebP is best. The picture with the teal '
+            f'frame is a kind\'s <b>main</b> picture: <i>Replace</i> swaps it for your own, <i>↺ Built-in</i> brings the '
+            f'built-in one back. <b>＋ Add pictures</b> puts more pictures in the same pool (up to {hosts.POOL_MAX} '
+            f'extra): a post or article picks one at random, and the article editor can pin one or re-roll. You can '
+            f'also drop picture files onto a row (adds them) or onto a main picture (replaces it). ✕ deletes an '
+            f'added picture.</p><p><button type=button class=link data-foldall=close>Fold all</button>'
+            f'<button type=button class=link data-foldall=open>Open all</button></p>{"".join(cards)}')
+    return frame("FlaVR Promo pictures", "🖼️ Pictures", body, saved, style=_PICTURES_STYLE)
 
 
 def lines_page(poster: Any, saved: str = "") -> str:
@@ -281,6 +353,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
                 errs.append(f"{f.filename}: {err}")
             else:
                 done += 1
+        if not done:                                  # nothing went in: only say why
+            raise _back("Nothing added. " + " ".join(errs), "pictures")
         raise _back(f"Added {done} picture{'' if done == 1 else 's'} to {who}." + (" " + " ".join(errs) if errs else ""),
                     "pictures")
 

@@ -24,8 +24,15 @@ drag to reorder, "add the GUI changes to the other parts of the webpage"):
     ``data-swap-id``). ``data-nolive`` on an element keeps its fields out of it;
   * drag to reorder: the ``<details id>`` children of a ``data-draglist`` element can be dragged by
     their summary with a mouse, or by holding the ⠿ grip and sliding on a touch screen; the new order goes in the form's hidden ``order`` field (ids, comma separated) and
-    is posted with action=order. A ``data-foldall="open"`` / ``"close"`` button opens / folds every card. No password, like the rest of port 3871 (home
-network only; never forward the port).
+    is posted with action=order. A ``data-foldall="open"`` / ``"close"`` button opens / folds every card;
+  * quick forms: ``<form data-quick>`` is posted in the background when one of its buttons is pressed
+    (files too, and at once when a file is chosen in it), then every ``data-swap`` part is swapped with
+    the answer's and the answer's "saved" note pops up as a toast, so the page stays where it is
+    (settings_page.py's Pictures tab: add / remove / replace a picture);
+  * drop zones: a picture file dropped on a ``data-dropzone="<id of a file input>"`` element is put
+    in that input and uploaded like a chosen file. ``class=nojs`` hides a control the script makes
+    needless (the Upload button next to a file input).
+No password, like the rest of port 3871 (home network only; never forward the port).
 """
 
 from __future__ import annotations
@@ -92,6 +99,12 @@ STYLE = (
     ".livestatus{color:#aab;font-size:14px;margin-left:8px}input[type=color]{width:44px!important;height:30px;padding:0;"
     "border:0;background:none;vertical-align:middle}button.link{background:none;color:var(--teal);padding:2px 6px;font-weight:normal}"
     ".inline label{display:inline-block;margin:4px 10px 4px 0}.inline select,.inline input{width:auto!important}"
+    # quick forms and drop zones (2026-11-22, the Pictures tab): the toast, the "busy" fade, the drop mark;
+    # html.js is set by SCRIPT, so .nojs controls stay visible when the script did not run
+    ".toast{position:fixed;right:18px;bottom:18px;max-width:min(460px,90vw);background:var(--teal);color:#000;"
+    "padding:10px 14px;border-radius:10px;box-shadow:0 6px 20px #000a;z-index:9;white-space:pre-wrap}"
+    ".busy{opacity:.5;pointer-events:none}.dropping{outline:3px dashed var(--teal);outline-offset:3px;border-radius:10px}"
+    ".js .nojs{display:none}"
 )
 
 # The comfort script of every page (see the docstring: folding, live forms, drag to reorder). Plain browser
@@ -203,6 +216,61 @@ document.querySelectorAll('form[data-live]').forEach(form=>{                    
     clearTimeout(timer);timer=setTimeout(()=>send('save',false),700);
   });
 });
+document.documentElement.classList.add('js');   // lets the page hide controls the script makes needless (.nojs)
+let toastTimer=0;
+function toast(t){                           // a note in the corner that goes away by itself
+  let n=document.querySelector('.toast');
+  if(!n){n=document.createElement('div');n.className='toast';document.body.appendChild(n)}
+  n.textContent=t;n.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{n.hidden=true},5000);
+}
+function quick(form,submitter){              // form[data-quick]: post in the background (files too), swap, toast
+  const data=new FormData(form);
+  if(submitter&&submitter.name)data.set(submitter.name,submitter.value);
+  const zone=form.closest('[data-swap]')||form;zone.classList.add('busy');
+  fetch(form.getAttribute('action'),{method:'POST',body:data}).then(r=>{if(!r.ok)throw 0;return r.text()}).then(html=>{
+    const doc=new DOMParser().parseFromString(html,'text/html');
+    document.querySelectorAll('[data-swap]').forEach(el=>{
+      const src=doc.querySelector('[data-swap-id="'+el.dataset.swapId+'"]');
+      if(src&&src.innerHTML!==el.innerHTML){el.innerHTML=src.innerHTML;wire(el)}
+    });
+    const note=doc.querySelector('.saved');toast(note?note.textContent:'Done.');
+  }).catch(()=>toast('That did not work. Reload the page and try again.')).finally(()=>{
+    zone.classList.remove('busy');if(form.isConnected)form.reset();
+  });
+}
+document.addEventListener('submit',e=>{
+  const f=e.target;
+  if(!f.matches||!f.matches('form[data-quick]'))return;
+  e.preventDefault();quick(f,e.submitter);
+});
+document.addEventListener('change',e=>{      // a file chosen in a quick form uploads at once
+  const t=e.target;
+  if(t.type!=='file'||!t.files.length)return;
+  const f=t.closest('form[data-quick]');
+  if(f)quick(f,f.querySelector('button[name=action]'));
+});
+if(document.querySelector('[data-dropzone]')){   // picture files dropped on the page
+  const files=e=>e.dataTransfer&&[...e.dataTransfer.types].includes('Files');
+  const zoneOf=e=>e.target.closest?e.target.closest('[data-dropzone]'):null;
+  const unmark=()=>document.querySelectorAll('.dropping').forEach(x=>x.classList.remove('dropping'));
+  document.addEventListener('dragover',e=>{
+    if(!files(e))return;
+    e.preventDefault();unmark();           // also off a zone, so a missed drop does not open the file instead of the page
+    const z=zoneOf(e);
+    e.dataTransfer.dropEffect=z?'copy':'none';
+    if(z)z.classList.add('dropping');
+  });
+  document.addEventListener('dragleave',e=>{if(!e.relatedTarget)unmark()});
+  document.addEventListener('drop',e=>{
+    if(!files(e))return;
+    e.preventDefault();unmark();
+    const z=zoneOf(e),input=z&&document.getElementById(z.dataset.dropzone);
+    if(!input)return;
+    const dt=new DataTransfer();
+    [...e.dataTransfer.files].slice(0,input.multiple?99:1).forEach(f=>dt.items.add(f));
+    input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));
+  });
+}
 document.querySelectorAll('[data-foldall]').forEach(b=>b.addEventListener('click',e=>{   // "Fold all" / "Open all"
   e.preventDefault();
   document.querySelectorAll('details.card').forEach(d=>{d.open=b.dataset.foldall==='open'});

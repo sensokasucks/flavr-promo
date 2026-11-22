@@ -12,6 +12,9 @@ def test_every_page_gets_the_script_and_sections_fold():
     page = panel.frame("T", "⚙️ Settings", "<section id=a><h2>One</h2><p>x</p></section>")
     assert "<script>" in page and "data-live" in panel.SCRIPT and "data-draglist" in panel.SCRIPT
     assert "getAttribute('action')" in panel.SCRIPT          # form.action is shadowed by the buttons named "action"
+    # quick forms and drop zones (the Pictures tab): posted in the background, files included
+    assert "form[data-quick]" in panel.SCRIPT and "data-dropzone" in panel.SCRIPT and "new FormData(form)" in panel.SCRIPT
+    assert ".js .nojs" in panel.STYLE and ".toast" in panel.STYLE
     assert "section.folded" in panel.STYLE and "details.card" in panel.STYLE
 
 

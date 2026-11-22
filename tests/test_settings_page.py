@@ -63,6 +63,19 @@ async def test_hosts_switches_and_pictures(tmp_path):
             assert "/settings/picture/colette/chibi_desk" in page                  # built-in pictures shown
             assert "FlaVR Promo</h2>" in page and 'class=on' in page               # drawn in the panel (flavrpromo/panel.py)
             assert "/settings/lines" in page and "<b>🖼️ Pictures</b>" in page     # its tab row
+            # the tidy layout (owner 2026-11-22): a folding card per host, a folding group per kind family, every
+            # kind in exactly one group, rows that update in place (quick forms, flavrpromo/panel.py) and take drops
+            grouped = [k for _, _, kinds in settings_page.PICTURE_GROUPS for k in kinds]
+            assert sorted(grouped) == sorted(hosts.KINDS)
+            for key in hosts.HOSTS:
+                assert f'<details class=card id="pics-{key}" open>' in page and f'data-swap-id="count-{key}"' in page
+                for gid, _, kinds in settings_page.PICTURE_GROUPS:
+                    assert f'id="pics-{key}-{gid}"' in page
+                    assert all(f'data-swap-id="pool-{key}-{k}"' in page for k in kinds)
+            assert "10 pictures · 0 your own" in page and "data-quick" in page
+            assert 'data-dropzone=add-colette-happy' in page and 'id="add-colette-happy"' in page
+            assert 'data-dropzone=main-clark-head' in page and 'id="add-clark-head"' not in page   # heads stay single
+            assert "value=reset" not in page                                       # nothing uploaded yet
             assert (await c.get("/settings/picture/clark/head")).status == 200
             form = aiohttp.FormData()
             form.add_field("host", "clark")
@@ -71,6 +84,8 @@ async def test_hosts_switches_and_pictures(tmp_path):
             form.add_field("file", b"PNG" * 1000, filename="face.png", content_type="image/png")
             r = await c.post("/settings/picture", data=form, allow_redirects=False)
             assert "Saved" in r.headers["Location"] and hosts.pictures("clark")["head"] == "yours"
+            page = await (await c.get("/settings/pictures")).text()
+            assert "main · yours" in page and "value=reset" in page and "10 pictures · 1 your own" in page
             r = await c.post("/settings/picture", data={"host": "clark", "kind": "head", "action": "reset"},
                              allow_redirects=False)
             assert hosts.pictures("clark")["head"] == "built-in"
@@ -117,7 +132,14 @@ async def test_picture_pool_upload_remove_and_pick(tmp_path):
             assert [v for v, _ in hosts.variants("colette", "happy")] == ["main", "1", "2"]
             assert await (await c.get("/settings/picture/colette/happy?v=2")).read() == b"two"
             assert (await c.get("/settings/picture/colette/happy?v=9")).status == 404
-            assert "/settings/picture/colette/happy?v=1" in await (await c.get("/settings/pictures")).text()
+            page = await (await c.get("/settings/pictures")).text()
+            assert "/settings/picture/colette/happy?v=1" in page and "3 of 13 · a post picks one at random" in page
+            form = aiohttp.FormData()                  # only files that can't be used: the note says why, nothing more
+            for name, value in (("host", "colette"), ("kind", "happy"), ("action", "add")):
+                form.add_field(name, value)
+            form.add_field("file", b"bad", filename="c.gif", content_type="image/gif")
+            r = await c.post("/settings/pool", data=form, allow_redirects=False)
+            assert "Nothing%20added" in r.headers["Location"] and "Added" not in r.headers["Location"]
             # a pin wins; the same seed always gives the same picture; no context = random from the pool
             with hosts.look(1, {"happy": "2"}):
                 assert hosts.picture("colette", "happy").read_bytes() == b"two"
@@ -131,5 +153,10 @@ async def test_picture_pool_upload_remove_and_pick(tmp_path):
             # numbers are never reused: the next upload is 3
             assert hosts.add_to_pool("colette", "happy", b"three", "d.png") == ""
             assert [v for v, _ in hosts.variants("colette", "happy")] == ["main", "2", "3"]
+            # a full pool has no "add" tile and takes no drops
+            for i in range(hosts.POOL_MAX - 2):
+                assert hosts.add_to_pool("colette", "happy", b"x%d" % i, "e.png") == ""
+            page = await (await c.get("/settings/pictures")).text()
+            assert 'id="add-colette-happy"' not in page and "full, remove one to add another" in page
     finally:
         hosts.init(None)
