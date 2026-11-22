@@ -27,7 +27,8 @@ Now each request differs in four ways, each with a switch on the settings page (
   angles     a different take per request ("make it a small joke", "use a 90s reference"): ANGLES
              for both hosts plus HOST_ANGLES for each, editable on the cards page (kv kobold_angles);
   memory     the last lines a host wrote for that kind of slot (kv host_said) are listed as "already
-             used, don't repeat", and a line that still comes out nearly the same is asked for again;
+             used, don't repeat" (not for SUBJECT_KINDS, whose earlier lines are about other streams and
+             would leak into this one), and a line that still comes out nearly the same is asked for again;
   examples   the card's example exchanges are shuffled and only EXAMPLES_MAX of them are sent;
   chattiness short / normal / chatty fills {length} in the asks (LENGTHS).
 Banter (kv hosts_banter, flavrpromo/hosts.py ``banter``): ``Kobold.replies`` has the OTHER host answer
@@ -164,6 +165,12 @@ SHORT_KINDS = ("desk_nudge", "desk_signoff", "reply")           # short lines: t
 EXAMPLES_MAX = 3            # example exchanges sent per request when shuffling (a card can hold more)
 SAID_KEY = "host_said"      # kv {host: {kind: [line, ...]}}: what KoboldCpp wrote before, newest last
 SAID_KEEP = 30              # lines kept per host and kind
+# Slot kinds whose lines are about ONE stream / game / picture (the facts name a person and a game). The
+# memory is never listed in their prompts: owner 2026-11-22 saw Lulu's remark pick up "Cara go brick
+# vampire" from Cara's remark, which the same host had written a minute before and which the prompt
+# quoted as "already used"; a small model borrows what it is shown. The code still compares a new line
+# with the memory (``too_close``), and the lines written for the SAME subject (``avoid``) are still listed.
+SUBJECT_KINDS = ("stream", "game", "stream_game", "game_talk", "tall_host", "tall_signoff")
 MEMORY = 12                 # of those, how many a request lists as "already used" (settings page; 0 = off)
 AVOID_CHARS = 140           # an "already used" line is cut to this many characters in the prompt
 CLOSE = 0.82                # difflib ratio from which two lines count as the same line again
@@ -481,7 +488,10 @@ class Kobold:
         the banter blanks (who is answered, what they said)."""
         text = facts if isinstance(facts, str) else facts_text(facts)
         full = fill_ask(ask, 1, heading, length_of(kind or "opener", self.chatty), name, said_line)
-        used = list(avoid) + [x for x in said(self.store, key, kind, self.memory) if x not in avoid]
+        same = list(avoid)                      # earlier lines for THIS subject: always safe to list
+        old = [x for x in said(self.store, key, kind, self.memory) if x not in avoid]
+        used = same + ([] if kind in SUBJECT_KINDS else old)       # what the prompt lists as "already used"
+        seen = same + old                                          # what a new line is compared with (code only)
         if angle is None:
             angle = self._angles(key, kind, 1)[0]
         rng = self.rng if self.shuffle else None
@@ -489,9 +499,11 @@ class Kobold:
         if got is None:
             return None
         new = as_line(got)
-        if new and retry and too_close(new, used):
+        if new and retry and too_close(new, seen):
             other = next((a for a in self._angles(key, kind, 3) if a != angle), angle)
-            again = await self.generate(prompt(key, full, text, other, used + [new], rng))
+            # the repeat is named in the retry, except a copy of ANOTHER subject's line (it would leak the same way)
+            named = [new] if kind not in SUBJECT_KINDS or too_close(new, same) else []
+            again = await self.generate(prompt(key, full, text, other, used + named, rng))
             if again is not None and as_line(again):
                 new = as_line(again)
         remember(self.store, key, kind, new)
