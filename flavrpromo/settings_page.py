@@ -11,12 +11,16 @@ Tabs and sections (each its own form; a save redirects back with a note):
   KoboldCpp   address, password (never shown back), creativity (temperature) and lines per slot,
               a Test button that asks KoboldCpp for its model. Saved in kv "kobold"; it wins over
               KOBOLD_URL / KOBOLD_KEY from the environment (an empty address there = off).
+              Variety (same kv): chattiness, a different angle per line, shuffled card examples and
+              how many used lines a host is told not to repeat (flavrpromo/kobold.py); "Forget what
+              they said" empties that memory (kv host_said).
   Hosts       on / off and "take turns" or always one host: the same kv as /host setup
               (hosts_on, hosts_only); "post go-live cards as the host" (kv hosts_webhook, default on,
               flavrpromo/host_webhooks.py; needs the bot's Manage Webhooks in the live channels); how
               long the Sunday board waits for the week-ahead picks (kv host_preview_wait, hours); the
               recap picture on ended go-live cards (kv host_recap_card, default on); boards in the
-              host's look (kv host_board, default on).
+              host's look (kv host_board, default on); the hosts answer each other (kv hosts_banter,
+              default on, flavrpromo/hosts.py ``banter``).
   Pictures    (/settings/pictures) a folding card per host, in it the picture kinds in groups
               (PICTURE_GROUPS: regular poses, chibi, heads), each kind a row of thumbnails: the main
               picture (replace it, the same as /host picture; "back to built-in" deletes the upload)
@@ -50,7 +54,9 @@ def kobold_settings(poster: Any) -> Dict[str, Any]:
     """The KoboldCpp settings in force: the page's (kv "kobold") over the environment's."""
     env = getattr(poster, "kobold_env", {}) or {}
     saved = poster.store.get("kobold") or {}
-    out = {"url": env.get("url", ""), "key": env.get("key", ""), "temperature": 0.8, "per_slot": PER_SLOT}
+    out = {"url": env.get("url", ""), "key": env.get("key", ""), "temperature": 0.8, "per_slot": PER_SLOT,
+           # variety (flavrpromo/kobold.py: angles, memory, shuffled examples, chattiness), all on by default
+           "angles": True, "shuffle": True, "memory": kobold.MEMORY, "chatty": "normal"}
     out.update({k: v for k, v in saved.items() if k in out})
     return out
 
@@ -60,11 +66,17 @@ def apply(poster: Any) -> None:
     cards and slot asks (flavrpromo/card_page.py)."""
     k = kobold_settings(poster)
     http = getattr(poster, "http", None)
-    poster.kobold = Kobold(http, k["url"], k["key"], float(k["temperature"]), int(k["per_slot"])) \
+    poster.kobold = Kobold(http, k["url"], k["key"], float(k["temperature"]), int(k["per_slot"]),
+                           store=poster.store, angles=bool(k["angles"]), shuffle=bool(k["shuffle"]),
+                           memory=int(k["memory"]), chatty=str(k["chatty"])) \
         if k["url"] and http is not None else None
     hosts.load_overrides(poster.store)
     kobold.load_card_overrides(poster.store)
 
+
+# the Chattiness menu (kobold.CHATTY values; what each does to an ask's {length} is kobold.LENGTHS)
+CHATTY_NAMES = (("short", "Short (a sentence)"), ("normal", "Normal (one to three sentences)"),
+                ("chatty", "Chatty (two to four sentences)"))
 
 # which tab a save goes back to ("pictures" and "lines" moved to their own tabs, others stay on Settings)
 _TAB_OF = {"pictures": "/settings/pictures", "lines": "/settings/lines"}
@@ -83,6 +95,8 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
     on = bool(store.get("hosts_on"))
     as_host = store.get("hosts_webhook") is not False      # flavrpromo/host_webhooks.py SETTING, default on
     wait = host_picker.preview_wait(store)
+    banter_on = store.get(hosts.BANTER_SETTING) is not False   # flavrpromo/hosts.py banter, default on
+    said_n = sum(len(v) for per in (store.get(kobold.SAID_KEY) or {}).values() for v in per.values())
     recap_on = store.get("host_recap_card") is not False   # flavrpromo/bot.py _recap_png, default on
     board_on = store.get("host_board") is not False        # flavrpromo/calendar_post.py board_host, default on                  # kv host_preview_wait (hours, 0 = for ever)
     # KoboldCpp
@@ -95,7 +109,21 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
            f'<label>Creativity <input name=temperature type=number min=0.1 max=1.5 step=0.05 value="{_e(k["temperature"])}">'
            f' <small>0.5 plain … 1.2 wild</small></label>'
            f'<label>Lines per slot <input name=per_slot type=number min=1 max=6 value="{_e(k["per_slot"])}"></label>'
-           f'<p><button name=action value=save>Save</button> <button name=action value=test>Save and test</button></p>'
+           # variety (owner 2026-11-22: "they pretty much say the same replies each time"); the hidden field
+           # tells save_kobold these boxes were on the form (an unticked box sends nothing)
+           f'<h3>Variety</h3><input type=hidden name=variety value=1>'
+           f'<label>Chattiness <select name=chatty>'
+           + "".join(f'<option value="{v}"{" selected" if k["chatty"] == v else ""}>{_e(n)}</option>' for v, n in CHATTY_NAMES)
+           + f'</select> <small>how long a line may be (the {{length}} in the asks on the Character cards tab)</small></label>'
+           f'<label><input type=checkbox name=angles value=1{" checked" if k["angles"] else ""}> A different angle for '
+           f'each line ("make it a small joke", "use a 90s reference"; the list is on the Character cards tab)</label>'
+           f'<label><input type=checkbox name=shuffle value=1{" checked" if k["shuffle"] else ""}> Shuffle the '
+           f'card\'s example exchanges (and send {kobold.EXAMPLES_MAX} of them at most)</label>'
+           f'<label>Remember the last <input name=memory type=number min=0 max={kobold.SAID_KEEP} value="{_e(k["memory"])}"> '
+           f'lines each host wrote for a slot and ask not to repeat them <small>(0 = off; {said_n} remembered now)</small></label>'
+           f'<p><button name=action value=save>Save</button> <button name=action value=test>Save and test</button> '
+           f'<button name=action value=forget class=alt title="Empties the list of lines the hosts are told not to '
+           f'repeat">Forget what they said</button></p>'
            + (f'<p class=test style="white-space:pre-wrap">{_e(test)}</p>' if test else "") + '</form></section>')
     # hosts on / off
     opts = [("", "Take turns (random, never 3 in a row)")] + [(key, f"Always {h['name']}") for key, h in hosts.HOSTS.items()]
@@ -104,6 +132,9 @@ def page(poster: Any, saved: str = "", test: str = "") -> str:
            f'reviews wait for your picks)</label>'
            + "".join(f'<label><input type=radio name=only value="{v}"{" checked" if only == v else ""}> {_e(n)}</label>'
                      for v, n in opts)
+           + f'<label><input type=checkbox name=banter value=1{" checked" if banter_on else ""}> The hosts answer each '
+           f'other: the other host gets a short reply on the opener card (pick "no reply" on the picker page to skip one; '
+           f'new reviews and drafts)</label>'
            + f'<label><input type=checkbox name=webhook value=1{" checked" if as_host else ""}> Post go-live cards as '
            f'the host (their name and face; needs the bot\'s Manage Webhooks permission in the live channels, '
            f'otherwise the bot posts them as before)</label>'
@@ -275,10 +306,19 @@ def add_routes(app: web.Application, poster: Any) -> None:
         try:
             new["temperature"] = max(0.1, min(1.5, float(str(form.get("temperature") or "0.8"))))
             new["per_slot"] = max(1, min(6, int(str(form.get("per_slot") or PER_SLOT))))
+            # the variety boxes: only when the form carried them (hidden "variety"), else they stay as saved
+            new.update({f: k[f] for f in ("angles", "shuffle", "memory", "chatty")})
+            if form.get("variety"):
+                new["angles"], new["shuffle"] = bool(form.get("angles")), bool(form.get("shuffle"))
+                new["memory"] = max(0, min(kobold.SAID_KEEP, int(str(form.get("memory") or 0))))
+                new["chatty"] = str(form.get("chatty")) if str(form.get("chatty")) in kobold.CHATTY else "normal"
         except ValueError:
-            raise _back("Creativity and lines per slot must be numbers.", "kobold")
+            raise _back("Creativity, lines per slot and the lines to remember must be numbers.", "kobold")
         store.put("kobold", new)
         apply(poster)
+        if str(form.get("action")) == "forget":          # the hosts' memory of used lines (kobold.remember)
+            store.put(kobold.SAID_KEY, {})
+            raise _back("Saved, and the hosts forgot the lines they wrote before.", "kobold")
         if str(form.get("action")) == "test":
             if poster.kobold is None:
                 test = "No address: KoboldCpp is off (template lines only)."
@@ -305,6 +345,8 @@ def add_routes(app: web.Application, poster: Any) -> None:
         store.put("hosts_webhook", bool(form.get("webhook")))   # flavrpromo/host_webhooks.py SETTING
         store.put("host_recap_card", bool(form.get("recap")))   # flavrpromo/bot.py _recap_png
         store.put("host_board", bool(form.get("board")))        # flavrpromo/calendar_post.py board_host
+        store.put(hosts.BANTER_SETTING, bool(form.get("banter")))   # flavrpromo/hosts.py banter (the "reply" slot)
+        hosts.load_overrides(store)
         try:                                                    # flavrpromo/host_picker.py preview_wait
             store.put("host_preview_wait", min(48.0, max(0.0, float(str(form.get("preview_wait") or host_picker.PREVIEW_WAIT)))))
         except ValueError:

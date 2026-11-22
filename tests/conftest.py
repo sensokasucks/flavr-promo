@@ -15,3 +15,15 @@ def _no_custom_groups():
     groups.init(None)
     yield
     groups.init(None)
+
+
+@pytest.fixture(autouse=True)
+def _banter_on():
+    """Each test starts with the hosts answering each other (the default; flavrpromo/hosts.py keeps the
+    switch in a module global that settings_page.save_hosts and hosts.load_overrides set)."""
+    from flavrpromo import hosts, kobold
+    hosts._banter = True
+    kobold._angle_edits.clear()
+    yield
+    hosts._banter = True
+    kobold._angle_edits.clear()

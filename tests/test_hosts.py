@@ -86,7 +86,14 @@ def test_review_facts_notes_and_candidates(tmp_path):
     labels = [n["label"] for n in hosts.notes(f)]
     assert labels == ["LONGEST STREAM", "MOST SHOWS", "NEW GAME"]
     c = hosts.review_candidates("clark", f)
-    assert set(c) == {"opener", "note0", "note1", "note2", "desk_highlight", "desk_nudge", "desk_signoff"}
+    assert set(c) == {"opener", "note0", "note1", "note2", "reply", "desk_highlight", "desk_nudge", "desk_signoff"}
+    # banter (owner 2026-11-22): "reply" holds the OTHER host's answers; off = no such slot
+    assert c["reply"] == hosts.TEMPLATES["colette"]["reply"] and hosts.other("clark") == "colette"
+    store.put(hosts.BANTER_SETTING, False)
+    hosts.load_overrides(store)
+    assert "reply" not in hosts.review_candidates("clark", f) and not hosts.banter()
+    store.put(hosts.BANTER_SETTING, True)
+    hosts.load_overrides(store)
     assert all(c[k] for k in c) and not any("{" in x for v in c.values() for x in v)
 
 
@@ -159,7 +166,8 @@ async def test_review_waits_for_picks_then_posts_in_order(tmp_path):
     await p.tick()
     out = d.sent[before:]
     assert [s[2].split("-")[1] if s[2].startswith("colette") else "board" for s in out] == ["opener", "board", "desk"]
-    assert out[0][3] == "My own line"                              # text-only card without Chromium
+    # text-only card without Chromium: the opener, then the other host's answer (banter)
+    assert out[0][3] == "My own line\n🍎 Clark: " + hosts.TEMPLATES["clark"]["reply"][0]
     assert "review" in out[1][2]
     assert store.get(key) is None and host_picker.waiting(store) == []
     await p.tick()

@@ -497,6 +497,16 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
         b = c.get("other") if c.get("other") in hosts.HOSTS and c.get("other") != a else next((k for k in hosts.HOSTS if k != a), a)
         rows = [x.strip() for x in str(c.get("lines") or "").splitlines() if x.strip()][:5] or ["Type the chat lines in the builder."]
         row_h = max(70, (h - 40) // len(rows))
+        # the bubbles' type size: as big as the row allows while the LONGEST line still fits in its row
+        # (KoboldCpp's chat lines run to two rows of text; before, two-row bubbles ran into each other)
+        bub_w = int(WIDTH * 0.66)
+        fs, pad = min(34, max(22, row_h // 3)), max(10, row_h // 6)
+        longest = max(len(x) for x in rows)
+        while fs > 17:
+            per_row = max(1, int((bub_w - 60) / (fs * 0.6)))            # characters per row of text, roughly
+            if -(-longest // per_row) * fs * 1.25 + 2 * pad + 10 <= row_h:
+                break
+            fs, pad = fs - 1, max(6, pad - 1)
         out = ""
         for n, text in enumerate(rows):
             who = a if n % 2 == 0 else b
@@ -505,9 +515,9 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
             mine = n % 2 == 0
             av = (f'<div style="width:{min(96, row_h - 10)}px;height:{min(96, row_h - 10)}px;border-radius:50%;flex:none;'
                   f'background:{acc}{f' center/cover url({avatar})' if avatar else ''};border:4px solid #fff;box-shadow:0 4px 10px #0007"></div>')
-            bub = (f'<div style="max-width:{int(WIDTH * 0.66)}px;background:{acc if mine else th["paper"]};'
-                   f'color:{"#fff" if mine else th["ink"]};border-radius:30px;padding:{max(10, row_h // 6)}px 30px;'
-                   f'font-size:{min(34, max(22, row_h // 3))}px;font-weight:700;line-height:1.25;box-shadow:0 5px 14px #0006">{_e(text)}</div>')
+            bub = (f'<div style="max-width:{bub_w}px;background:{acc if mine else th["paper"]};'
+                   f'color:{"#fff" if mine else th["ink"]};border-radius:30px;padding:{pad}px 30px;'
+                   f'font-size:{fs}px;font-weight:700;line-height:1.25;box-shadow:0 5px 14px #0006">{_e(text)}</div>')
             out += (f'<div style="height:{row_h}px;display:flex;align-items:center;gap:20px;'
                     f'{"" if mine else "flex-direction:row-reverse;"}">{av}{bub}</div>')
         return f'<div style="position:relative;height:{h}px;overflow:hidden;padding:20px 70px">{out}</div>'

@@ -13,6 +13,10 @@ With hosts on (/host setup on), a Friday / Monday review doesn't post at its tim
   With KOBOLD_URL set, KoboldCpp writes more lines for every slot in the background as soon as the
   review starts waiting (``start_ai``, flavrpromo/kobold.py); they appear first in each slot with a ✨,
   and the page's "Write more" button asks again. KoboldCpp offline = template lines only.
+  Banter (owner 2026-11-22: hosts answering each other): slot "reply" holds the OTHER host's short
+  answers to the opener (their "reply" template lines, KoboldCpp's real answers in front); the picked
+  one is drawn on the opener card (flavrpromo/host_cards.py ``_reply``) and "no reply this time"
+  leaves it off (an empty pick). Off for good: settings page, Hosts (flavrpromo/hosts.py ``banter``).
   The Sunday preview (label "preview", owner 2026-11-21) works the same way with the week ahead's
   facts (hosts.preview_facts): an opener card only (no desk card), then the new week's board.
   Unlike a review, the board is the week's main post, so after the owner's wait limit (kv
@@ -47,7 +51,8 @@ NUDGE_AFTER = 3600.0            # seconds after the first DM before the one remi
 INDEX = "host_reviews"          # kv: the pending review keys, for the picker page
 HEADINGS = {"week": "Week in Review", "weekend": "Weekend in Review", "preview": "Week Ahead"}
 PREVIEW_WAIT = 3                # hours the Sunday board waits for the preview picks (kv host_preview_wait)
-PREVIEW_SLOTS = ("opener", "note")  # the preview's slots (no desk card): what KoboldCpp is asked for
+PREVIEW_SLOTS = ("opener", "note", "reply")  # the preview's slots (no desk card): what KoboldCpp is asked for
+NO_REPLY = "__none"             # the form value of a "reply" slot's "no reply" choice (saved as an empty pick)
 _tasks: Dict[str, "asyncio.Task[None]"] = {}     # KoboldCpp writing for a pending review (key → task)
 
 
@@ -157,8 +162,10 @@ async def _write(poster: Any, k: str, host: str, only: tuple = ()) -> None:
     store = poster.store
     p = store.get(k) or {}
     try:
+        # reply_to: the opener on the page now, for the other host's answers when no new opener is written
         got = await poster.kobold.write(host, p.get("facts") or {}, heading_of(p, "review"),
-                                        p.get("notes") or [], **({"only": only} if only else {}))
+                                        p.get("notes") or [], reply_to=chosen(p, "opener"),
+                                        **({"only": only} if only else {}))
     except Exception:
         log.exception("KoboldCpp lines failed")
         got = {}
@@ -215,7 +222,8 @@ def card_html(p: Dict[str, Any], card: str) -> str:
             ("sleepy" if not f.get("planned") else "pointing") if preview else hosts.pose(f)
         return host_cards.opener(key, heading_of(p), str(f.get("range") or ""),
                                  chosen(p, "opener"), notes, [chosen(p, f"note{i}") for i in range(len(notes))],
-                                 pose, p.get("opener_kind") == "chibi", preview=preview)
+                                 pose, p.get("opener_kind") == "chibi", preview=preview,
+                                 reply=chosen(p, "reply"), reply_key=hosts.other(key))
     return host_cards.desk(key, chosen(p, "desk_highlight"), chosen(p, "desk_nudge"), chosen(p, "desk_signoff"),
                            p.get("desk_kind") or "desk")
 
@@ -231,6 +239,9 @@ async def post_card(poster: Any, channel: str, p: Dict[str, Any], card: str) -> 
             log.warning("host card picture failed: %s", e)
     text = chosen(p, "opener") if card == "opener" else \
         "\n".join(x for x in (chosen(p, "desk_highlight"), chosen(p, "desk_nudge"), chosen(p, "desk_signoff")) if x)
+    if card == "opener" and chosen(p, "reply"):         # banter: the other host's answer (text-only posts)
+        o = hosts.HOSTS[hosts.other(p["host"])]
+        text += f"\n{o['emoji']} {o['name']}: {chosen(p, 'reply')}"
     data = {"title": f"{h['emoji']} {h['name']} · {HEADINGS.get(p['label'], '')}".strip(" ·"),
             "colour": int(h["accent"].lstrip("#"), 16), "fields": [], "description": text if not png else "",
             "empty": False}
@@ -274,6 +285,8 @@ def page(store: Any, saved: str = "", ai_on: bool = False) -> str:
                 i = int(slot[4:])
                 n = (p.get("notes") or [{}] * (i + 1))[i]
                 title = f"note: {n.get('label', '').lower()} ({n.get('value', '')})"
+            if slot == "reply":                         # banter: the other host answers the opener
+                title = f"{hosts.HOSTS[hosts.other(p['host'])]['name']} answers the opener (on the opener card)"
             cur = chosen(p, slot)
             ai = set(p.get("ai") or [])
             opts = "".join(
@@ -283,6 +296,10 @@ def page(store: Any, saved: str = "", ai_on: bool = False) -> str:
             custom = cur if cur and cur not in cands else ""
             opts += (f'<label><input type=radio name="{slot}" value="__custom"{" checked" if custom else ""}> your own: '
                      f'<input name="{slot}__text" value="{_e(custom)}" maxlength={kobold.MAX_CHARS}></label>')
+            if slot == "reply":
+                off = slot in (p.get("picks") or {}) and not p["picks"][slot]
+                opts += (f'<label><input type=radio name="{slot}" value="{NO_REPLY}"{" checked" if off else ""}> '
+                         f'no reply this time</label>')
             slots.append(f"<fieldset><legend>{_e(title)}</legend>{opts}</fieldset>")
         q = f"key={quote(k)}&t={int(time.time())}"
         blocks.append(
@@ -334,6 +351,9 @@ def add_routes(app: web.Application, poster: Any) -> None:
             picks = {}
             for slot in p.get("candidates") or {}:
                 v = str(form.get(slot) or "")
+                if v == NO_REPLY:
+                    picks[slot] = ""                # kept as an empty pick: ``chosen`` then gives no line
+                    continue
                 if v == "__custom":
                     v = " ".join(str(form.get(f"{slot}__text") or "").split())[:kobold.MAX_CHARS]
                 if v:

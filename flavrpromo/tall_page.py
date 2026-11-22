@@ -41,6 +41,7 @@ from . import article_editor, host_picker, hosts, kobold, recipes, tall
 from .panel import _e, frame
 
 CHUNKS_KEY, TEMPLATES_KEY = tall.CHUNKS_KEY, tall.TEMPLATES_KEY
+CHAT_MAX = 900              # characters kept of a chat chunk's rows (up to 5 lines; KoboldCpp writes 4)
 NAME_MAX = 40
 
 
@@ -142,7 +143,11 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str]) -
         return (f'<label>First speaker <select name="{cid}__host">{_opts(hopts, c.get("host") or "")}</select></label> '
                 f'<label>Answers <select name="{cid}__other">{_opts(oopts, c.get("other") or "")}</select></label>'
                 f'<label>Lines, one per row (they take turns)</label>'
-                f'<textarea name="{cid}__lines" rows=5 maxlength=600>{_e(c.get("lines"))}</textarea>')
+                f'<textarea name="{cid}__lines" rows=5 maxlength={CHAT_MAX}>{_e(c.get("lines"))}</textarea>'
+                # banter: KoboldCpp writes the whole back-and-forth, each line with the speaker's own card
+                f'<p><button name=action value="ai:{cid}" class=alt>✨ Write the chat</button> <small>(KoboldCpp has the '
+                f'two hosts answer each other about this review, {recipes.CHAT_TURNS} lines; it replaces what is '
+                f'typed above and the page waits for it)</small></p>')
     if t in ("stream", "game"):
         if t == "stream":
             refs = [("", "(pick a stream)")] + [(x["ref"], x["label"]) for x in tall.tile_choices(week)]
@@ -232,10 +237,10 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
     stacks = _opts([(f"b:{n}", f"{n} (built-in)") for n in tall.BUILTIN] + [(f"t:{n}", n) for n in sorted(templates)], "")
     dels = _opts([(f"c:{n}", f"chunk: {n}") for n in sorted(saved_chunks)] + [(f"t:{n}", f"stack: {n}") for n in sorted(templates)], "")
     state = (p["talls"][tid].get("ai_state") or "")
-    ai_tools = ('<p><button name=action value=aiall class=alt>✨ Write all empty remarks</button> '
+    ai_tools = ('<p><button name=action value=aiall class=alt>✨ Write all empty remarks and chats</button> '
                 + (f'<small>KoboldCpp: {_e(recipes.AI_STATES.get(state, state))}</small>' if state else
                    '<small>one request each, in the background; refresh to see them</small>') + '</p>'
-                if any(c["type"] in recipes.LINE_TYPES for c in chunks) else "")
+                if any(c["type"] in recipes.LINE_TYPES or c["type"] == "chat" for c in chunks) else "")
     tools = (
         f'<section class=tools data-nolive>{ai_tools}<p><select name=newtype>{add}</select> <button name=action value=add>+ Add a chunk</button></p>'
         + (f'<p><select name=insert>{ins}</select> <button name=action value=insert class=alt>Insert my saved chunk</button></p>'
@@ -303,7 +308,7 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
         if get("other") is not None:
             c["other"] = get("other") if get("other") in hosts.HOSTS else ""
         if get("lines") is not None:
-            c["lines"] = "\n".join(" ".join(x.split())[:kobold.MAX_CHARS] for x in str(get("lines")).splitlines() if x.strip())[:600]
+            c["lines"] = "\n".join(" ".join(x.split())[:kobold.MAX_CHARS] for x in str(get("lines")).splitlines() if x.strip())[:CHAT_MAX]
     if t == "header":
         c["title"], c["sub"] = " ".join(str(get("title") or "").split())[:120], " ".join(str(get("sub") or "").split())[:120]
     if t in ("host", "footer", "hero"):
@@ -451,6 +456,11 @@ def add_routes(app: web.Application, poster: Any) -> None:
             if sorted(ids) == sorted(by):
                 chunks[:] = [by[x] for x in ids]
                 note = "Moved."
+        elif verb == "ai" and i >= 0 and chunks[i]["type"] == "chat":   # ✨ a chat chunk: the hosts' back-and-forth
+            text, note = await recipes.write_chat(poster, p, chunks[i])
+            if text:
+                chunks[i]["lines"] = text[:CHAT_MAX]
+            anchor = cid
         elif verb == "ai" and i >= 0:           # ✨ one chunk's remark: a few to pick from (the page waits)
             got, note = await recipes.write_choices(poster, p, week, chunks[i])
             if got:

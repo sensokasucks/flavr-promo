@@ -15,13 +15,20 @@ class FakeKobold:
     def __init__(self, answer="A cosy one."):
         self.asked, self.answer, self.last_raw = [], answer, ""
 
-    async def line(self, key, ask, heading, facts):
+    async def line(self, key, ask, heading, facts, **kw):
         self.asked.append((key, ask, facts))
+        self.kinds = getattr(self, "kinds", []) + [kw.get("kind")]
         return self.answer
 
-    async def lines(self, key, ask, heading, facts, n=0):
+    async def chat(self, first, second, heading, facts, turns=4):
+        """The ✨ on a chat chunk (kobold.Kobold.chat makes one request per turn)."""
+        self.chatted = (first, second, facts, turns)
+        return ["So, eight streams.", "EIGHT!! I counted twice!", "I counted once. Correctly.", "Show-off."]
+
+    async def lines(self, key, ask, heading, facts, n=0, **kw):
         """The ✨ on a chunk: a few alternatives (kobold.Kobold.lines makes one request per line)."""
         self.asked.append((key, ask, facts))
+        self.kinds = getattr(self, "kinds", []) + [kw.get("kind")]
         return [self.answer, "Second take.", "Third take."]
 
 
@@ -145,6 +152,13 @@ async def test_recipes_build_sections_and_kobold_writes_remarks_from_the_facts(t
             facts = kob.asked[-1][2]
             t = week.days[day][0]
             assert t.name in facts and "streamed" in facts and week.date_of(day).strftime("%A") in facts
+            # ✨ on a chat chunk (banter): the two hosts' back-and-forth replaces its rows
+            await build("tall2", "add", newtype="chat")
+            chat = poster.store.get(dkey)["talls"]["tall2"]["chunks"][-1]
+            assert chat["type"] == "chat" and "Write the chat" in await (await c.get(f"/settings/tall?d={dkey}&t=tall2")).text()
+            ch = await build("tall2", f"ai:{chat['id']}")
+            assert ch[-1]["lines"].splitlines()[1] == "EIGHT!! I counted twice!" and kob.chatted[:2] == ("colette", "clark")
+            assert kob.kinds[-1] == "stream"                  # the remarks say what kind of slot they are for
             # ✨ write all: only the empty remarks, in the background
             await build("tall1", "save", c3__line="Keep me.")
             before = poster.store.get(dkey)["talls"]["tall1"]["chunks"]
