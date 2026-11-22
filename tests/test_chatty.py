@@ -79,6 +79,29 @@ async def test_a_host_is_told_what_it_already_said_and_does_not_repeat():
     assert len(kobold.said(store, "clark", "day")) == kobold.SAID_KEEP and kobold.said(store, "clark", "day", 2)[-1].endswith("34")
 
 
+async def test_a_remark_about_one_stream_is_not_shown_the_remarks_about_other_streams():
+    # owner 2026-11-22: Lulu's remark talked about "Cara go brick vampire", from Cara's remark by the same host
+    store = Store(":memory:")
+    ask = kobold.asks()["stream"]
+    k = FakeKobold(['"Cara is a little brick vampire, I love it."]', '"Fresh take on the space opera."]'], store=store)
+    await k.line("colette", ask, "Monday, in detail", "Cara streamed a brick game.", kind="stream")
+    got = await k.line("colette", ask, "Monday, in detail", "Lulu streamed Xenosaga.", kind="stream")
+    assert got == "Fresh take on the space opera." and "brick vampire" not in k.prompts[1]
+    assert "already used" not in k.prompts[1]
+    assert "Cara is a little brick vampire, I love it." in kobold.said(store, "colette", "stream")   # still remembered
+    # ... and a line that is Cara's again is still caught and asked for once more, only without naming it
+    again = FakeKobold(['"Cara is a little brick vampire, I love it!"]', '"A different thought altogether."]'], store=store)
+    assert await again.line("colette", ask, "Monday, in detail", "Lulu streamed Xenosaga.", kind="stream") == \
+        "A different thought altogether."
+    assert len(again.prompts) == 2 and "brick vampire" not in again.prompts[1]
+    # the lines written for the SAME stream (✨ gives several) still tell each other apart
+    batch = FakeKobold(['"First take."]', '"Second take."]'], store=store)
+    await batch.lines("colette", ask, "Monday, in detail", "Lulu streamed Xenosaga.", n=2, kind="stream")
+    assert '"First take."' in batch.prompts[1] and "already used" not in batch.prompts[0]
+    # kinds about the whole week keep the memory in the prompt
+    assert "tall_signoff" in kobold.SUBJECT_KINDS and "opener" not in kobold.SUBJECT_KINDS
+
+
 def test_card_examples_are_shuffled_and_capped():
     text = kobold.card("clark")["mes_example"]
     blocks = [b for b in text.split("<START>") if b.strip()]
