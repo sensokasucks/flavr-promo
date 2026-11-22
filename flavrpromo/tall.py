@@ -8,7 +8,8 @@ add up to at most MAX_H pixels. This file is the model and the drawing; the buil
 saving) is flavrpromo/tall_page.py, and the article editor adds a tall picture as a section
 (flavrpromo/article_editor.py).
 
-A chunk is a dict: {"id", "type", "size" (0 small, 1 medium, 2 large), "cut", "slope", ...fields of its type}.
+A chunk is a dict: {"id", "type", "size" (0 small, 1 medium, 2 large), "cut", "slope", "band", ...fields of its type}.
+``band`` is the chunk's own background colour (a BAND_COLOURS key or "#rrggbb"; "" = automatic).
 ``cut`` is the shape of the chunk's bottom edge: "" straight, "down" slanting down to the right, "up"
 slanting down to the left (owner 2026-11-21: diagonal cuts "add a more fun feel"); ``slope`` 0 / 1 / 2 is
 how steep (SLOPES px). A chunk with a cut, and the one under it, get their own background colour (BANDS)
@@ -85,6 +86,12 @@ DEFAULT_SHOW: Dict[str, Tuple[str, ...]] = {
     "stream": ("thumb", "name", "when", "game", "title", "line"),
     "game": ("people", "count", "tags", "genre", "about", "line"),
 }
+# the band colour menu of every chunk (``band``: a key here, or "#rrggbb" from the colour box; "" = automatic:
+# the theme background, or the host's BANDS in turn next to a cut). Owner 2026-11-22: "a colour menu per chunk".
+BAND_COLOURS = {"plum": ("Plum", "#2a0f2a"), "berry": ("Berry", "#521b4c"), "wine": ("Wine", "#3d1233"),
+                "night": ("Night", "#15101a"), "pink": ("Hot pink", "#b3187a"), "navy": ("Navy", "#14213d"),
+                "teal": ("Teal", "#0e4a4c"), "forest": ("Forest", "#173a24"), "cocoa": ("Cocoa", "#3a2416"),
+                "rust": ("Rust", "#7a3a14"), "gold": ("Gold", "#f8cf33"), "paper": ("Paper", "#f4ead8")}
 PIC_TYPES = ("header", "stats", "grid", "quote")      # chunk types whose host picture is optional (``pic``)
 # the picture controls every chunk has: field → (lowest, highest, default); see the docstring
 PIC_NUMBERS = {"pscale": (30, 400, 100), "prot": (-180, 180, 0), "px": (-1600, 1600, 0), "py": (-1200, 1200, 0)}
@@ -150,6 +157,7 @@ def strip(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     chat lines) emptied. recipes.fill puts this week's streams and games in when it is used."""
     out = renumber(chunks)
     for c in out:
+        c.pop("choices", None)                    # KoboldCpp's alternatives for this week's remark
         for k in WEEK_FIELDS:
             if k in c:
                 c[k] = ""
@@ -184,6 +192,20 @@ BUILTIN: Dict[str, List[Dict[str, Any]]] = {
         {"id": "c4", "type": "quote", "size": 0, "text": ""},
     ],
 }
+
+
+def band_colour(c: Dict[str, Any]) -> str:
+    """The chunk's own background colour as "#rrggbb", "" when it is left automatic (or the value is nonsense)."""
+    b = str(c.get("band") or "")
+    if b in BAND_COLOURS:
+        return BAND_COLOURS[b][1]
+    return b.lower() if len(b) == 7 and b[0] == "#" and all(x in "0123456789abcdefABCDEF" for x in b[1:]) else ""
+
+
+def _is_light(colour: str) -> bool:
+    """Whether dark text reads better on ``colour`` ("#rrggbb"): its perceived brightness is over 60%."""
+    r, g, b = (int(colour[i:i + 2], 16) for i in (1, 3, 5))
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6
 
 
 def shown(c: Dict[str, Any], part: str) -> bool:
@@ -474,7 +496,9 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
     n, y, rows, seams, pops = len(chunks), 0, [], [], ""
     for i, c in enumerate(chunks):
         h, d, above = height(c), cuts[i], (cuts[i - 1] if i else 0)
-        bg = f"background:{bands[i % len(bands)]};" if (d or above) else ""
+        own = band_colour(c)                      # the owner's pick wins over the automatic bands
+        bg = (f"background:{own};" + (f"color:{th['ink']};" if _is_light(own) else "") if own
+              else f"background:{bands[i % len(bands)]};" if (d or above) else "")
         clip = ""
         if d:
             kind = c.get("cut")
@@ -516,5 +540,5 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
             f'<div style="position:absolute;left:0;top:0;z-index:100">{pops}</div></body></html>')
 
 
-__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "tag_words", "CUTS", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
+__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
            "tile_choices"]

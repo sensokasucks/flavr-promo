@@ -16,6 +16,9 @@ edits it:
     picture ...; "mix n match the content of each segment") and a ✨ that has KoboldCpp write the remark
     from that stream's / game's facts (flavrpromo/recipes.py); "✨ Write all remarks" does every empty one
     in the background,
+  * the page saves itself and redraws the preview as menus change (flavrpromo/panel.py SCRIPT, "data-live");
+    each chunk is a folding card whose bar can be dragged to reorder (↑ ↓ still work), with a colour menu
+    for its background (tall.BAND_COLOURS or any colour),
   * a host picture on any chunk (always there on host moment / hero / sign-off, a tick box on the others)
     with its own size %, turn in degrees, mirror, move right / down, and "let it stick out" over the
     neighbouring chunks (tall.figure),
@@ -80,6 +83,17 @@ def _picture_menus(c: Dict[str, Any], p: Dict[str, Any]) -> str:
             f'<small>Change the host or pose, press Save, then the picture menu shows that pose\'s pool.</small>')
 
 
+def _choices(c: Dict[str, Any]) -> str:
+    """KoboldCpp's remarks for this chunk to pick from (the ✨ button, recipes.write_choices); picking one
+    puts it in the Remark box."""
+    got = [x for x in c.get("choices") or [] if x]
+    if not got:
+        return ""
+    rows = "".join(f'<label class=tick><input type=radio name="{c["id"]}__choice" value="{i}"'
+                   f'{" checked" if x == c.get("line") else ""}> {_e(x)}</label>' for i, x in enumerate(got))
+    return f'<div class=choices><small>✨ KoboldCpp wrote these; pick one (or type your own above):</small>{rows}</div>'
+
+
 def _figure_controls(c: Dict[str, Any], p: Dict[str, Any]) -> str:
     """The host picture box every chunk but the chat has: the tick box (and side, host, pose) on chunk types
     where the picture is optional, then size / turn / mirror / move / stick out once there is a picture."""
@@ -141,15 +155,39 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str]) -
                         f'{" checked" if tall.shown(c, k) else ""}> {_e(n)}</label>' for k, n in tall.SHOW[t].items())
         more = _picture_menus(c, p) if tall.shown(c, "host") else ""
         return (pick + f'<p class=ticks><input type=hidden name="{cid}__showed" value=1>{ticks}</p>' + more
-                + _line_field(c, "line", lines, "Remark")
+                + _line_field(c, "line", lines, "Remark") + _choices(c)
                 + f'<p><button name=action value="ai:{cid}" class=alt>✨ Write the remark</button> '
-                f'<small>(KoboldCpp, from this {t}\'s facts; the page waits for it)</small></p>')
+                f'<small>(KoboldCpp writes a few from this {t}\'s facts to pick from; the page waits for it)</small></p>')
     if t == "grid":
         days = [(str(i), week.day_name(i)) for i in range(len(week.days))]
         return f'<label>Day <select name="{cid}__day">{_opts(days, c.get("day") or 0)}</select></label>'
     if t == "quote":
         return _line_field(c, "text", lines, "Line from the article")
     return '<small>Filled from the review\'s highlight numbers.</small>'
+
+
+def _what(c: Dict[str, Any], p: Dict[str, Any], week: Any) -> str:
+    """A few words on what a chunk holds, for its folded bar ("Lulu · MON · Valheim", the start of a line ...)."""
+    t = c["type"]
+    if t == "stream":
+        return next((x["label"] for x in tall.tile_choices(week) if x["ref"] == c.get("ref")), "no stream picked")
+    if t == "game":
+        return c.get("game") or "no game picked"
+    if t == "grid":
+        return week.day_name(int(c.get("day") or 0)) if getattr(week, "days", None) else ""
+    if t == "chat":
+        return str(c.get("lines") or "").split("\n")[0]
+    return str(c.get("title") or c.get("line") or c.get("text") or "")
+
+
+def _band_menu(c: Dict[str, Any]) -> str:
+    """The chunk's colour: automatic, one of tall.BAND_COLOURS, or any colour from the colour box."""
+    cid, cur = c["id"], str(c.get("band") or "")
+    custom = cur if cur.startswith("#") and tall.band_colour(c) else ""
+    opts = [("", "Automatic")] + [(k, n) for k, (n, _) in tall.BAND_COLOURS.items()] + [("custom", "My own colour →")]
+    return (f'<label>Colour <select name="{cid}__band">{_opts(opts, "custom" if custom else cur)}</select></label> '
+            f'<input type=color name="{cid}__bandhex" value="{_e(custom or tall.band_colour(c) or "#3d1233")}" '
+            f'title="used when the menu says My own colour">')
 
 
 def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: str = "") -> str:
@@ -169,20 +207,23 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
         cid, label = c["id"], tall.TYPES[c["type"]][0]
         sizes = [("0", f"Small ({tall.TYPES[c['type']][1][0]} px)"), ("1", f"Medium ({tall.TYPES[c['type']][1][1]} px)"),
                  ("2", f"Large ({tall.TYPES[c['type']][1][2]} px)")]
+        # one folding card per chunk: the bar (drag it to reorder) says what it is; the menus are inside
         blocks.append(
-            f'<section class=chunk id="{cid}"><div class=head><b>{i + 1}. {_e(label)}</b> '
-            f'<label>Size <select name="{cid}__size">{_opts(sizes, c.get("size", 1))}</select></label>'
-            f'<span><button name=action value="up:{cid}" class=alt{" disabled" if i == 0 else ""}>↑</button> '
+            f'<details class="card chunk" id="{cid}"><summary><span class=grip title="drag to reorder">⠿</span>'
+            f'<b>{i + 1}. {_e(label)}</b> <span class=what>{_e(_what(c, p, week))}</span> '
+            f'<small>{tall.height(c)} px</small><span class=acts>'
+            f'<button name=action value="up:{cid}" class=alt{" disabled" if i == 0 else ""}>↑</button> '
             f'<button name=action value="down:{cid}" class=alt{" disabled" if i == len(chunks) - 1 else ""}>↓</button> '
             f'<button name=action value="dup:{cid}" class=alt>Duplicate</button> '
-            f'<button name=action value="del:{cid}" class=alt>Remove</button></span></div>'
+            f'<button name=action value="del:{cid}" class=alt>Remove</button></span></summary><div class=inner>'
+            f'<p><label>Size <select name="{cid}__size">{_opts(sizes, c.get("size", 1))}</select></label> {_band_menu(c)}</p>'
             f'{_fields(c, p, week, lines)}{_figure_controls(c, p)}'
             + ("" if i == len(chunks) - 1 else
                f'<p><label>Bottom edge <select name="{cid}__cut">{_opts(tall.CUTS.items(), c.get("cut") or "")}</select></label> '
                f'<label>Slope <select name="{cid}__slope">{_opts([("0", "Gentle"), ("1", "Normal"), ("2", "Steep")], c.get("slope", 1))}'
                f'</select></label></p>')
-            + f'<p class=savebox><input name="{cid}__savename" placeholder="save this chunk as…" maxlength={NAME_MAX}> '
-            f'<button name=action value="savechunk:{cid}" class=alt>Save chunk</button></p></section>')
+            + f'<p class=savebox data-nolive><input name="{cid}__savename" placeholder="save this chunk as…" maxlength={NAME_MAX}> '
+            f'<button name=action value="savechunk:{cid}" class=alt>Save chunk</button></p></div></details>')
     add = _opts([(k, v[0]) for k, v in tall.TYPES.items()], "quote")
     ins = _opts([(n, n) for n in sorted(saved_chunks)], "")
     stacks = _opts([(f"b:{n}", f"{n} (built-in)") for n in tall.BUILTIN] + [(f"t:{n}", n) for n in sorted(templates)], "")
@@ -193,7 +234,7 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
                    '<small>one request each, in the background; refresh to see them</small>') + '</p>'
                 if any(c["type"] in recipes.LINE_TYPES for c in chunks) else "")
     tools = (
-        f'<section class=tools>{ai_tools}<p><select name=newtype>{add}</select> <button name=action value=add>+ Add a chunk</button></p>'
+        f'<section class=tools data-nolive>{ai_tools}<p><select name=newtype>{add}</select> <button name=action value=add>+ Add a chunk</button></p>'
         + (f'<p><select name=insert>{ins}</select> <button name=action value=insert class=alt>Insert my saved chunk</button></p>'
            if saved_chunks else "")
         + f'<p><select name=stack>{stacks}</select> <button name=action value=load class=alt>Start from this stack</button> '
@@ -203,25 +244,32 @@ def page(p: Dict[str, Any], dkey: str, tid: str, week: Any, store: Any, saved: s
         + (f'<p><select name=delwhat>{dels}</select> <button name=action value=delsaved class=alt>Delete saved</button></p>'
            if (saved_chunks or templates) else "") + '</section>')
     back = f'/settings/article?group={quote(p["group"])}&which={quote(p["which"])}#s-{tid}'
-    body = (f'<p><a href="{back}">← back to the article</a></p>{meter}'
-            f'<form method=post action=/settings/tall><input type=hidden name=d value="{_e(dkey)}">'
-            f'<input type=hidden name=t value="{_e(tid)}">'
-            f'<p><button name=action value=save>Save and preview</button></p>'
-            f'<div class=prev><img src="/settings/tall/picture?d={quote(dkey)}&t={tid}&v={int(p.get("saved_at") or 0)}" '
-            f'alt="preview" loading=lazy></div>{"".join(blocks)}{tools}</form>'
+    pic = f'/settings/tall/picture?d={quote(dkey)}&t={tid}&v={article_editor.stamp(p, tid)}'
+    # data-live: the form saves itself and the parts marked data-swap are refreshed (flavrpromo/panel.py SCRIPT);
+    # the chunk list is a data-draglist: dropping a card posts action=order with the ids in the hidden "order"
+    body = (f'<p><a href="{back}">← back to the article</a></p>'
+            f'<form method=post action=/settings/tall data-live data-foldkey="{_e(dkey)}:{_e(tid)}">'
+            f'<input type=hidden name=d value="{_e(dkey)}"><input type=hidden name=t value="{_e(tid)}">'
+            f'<input type=hidden name=order value="">'
+            f'<div data-swap=always data-swap-id=meter>{meter}</div>'
+            f'<p><button name=action value=save>Save and preview</button> <span class=livestatus>Changes save and '
+            f'redraw on their own.</span> <button type=button class=link data-foldall=close>Fold all</button><button type=button class=link data-foldall=open>Open all</button></p>'
+            f'<div class=prev data-swap=always data-swap-id=prev><a href="{pic}" target=_blank title="open full size">'
+            f'<img src="{pic}" alt="preview"></a></div>'
+            f'<div class=chunks data-swap=rebuild data-swap-id=chunks data-draglist>{"".join(blocks)}</div>{tools}</form>'
             # ✨ on one chunk waits for KoboldCpp: show it's working instead of a page that looks stuck
-            "<script>document.querySelector('form').addEventListener('submit',e=>{const b=e.submitter;"
+            "<script>document.querySelector('form[data-live]').addEventListener('submit',e=>{const b=e.submitter;"
             "if(b&&/^ai:/.test(b.value)){b.textContent='✨ writing… (up to a minute)';"
             "setTimeout(()=>document.querySelectorAll('button').forEach(x=>x.disabled=true),0)}});</script>")
     style = (".meter{height:14px;background:#0e0f14;border-radius:8px;overflow:hidden}.meter div{height:100%;background:#2ae0d4}"
              ".meter.over div{background:#e5312f}.bad{color:#ff7a7a;font-weight:bold}"
-             ".prev img{max-width:520px;width:100%;border-radius:8px;border:2px solid #3d2a3b;display:block;margin:10px 0}"
-             ".chunk{border:1px solid #3d2a3b;border-radius:10px;padding:8px 14px;margin:10px 0}"
-             ".chunk .head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}"
-             ".chunk label{display:inline-block;margin:6px 10px 6px 0}.ticks label.tick{margin:2px 14px 2px 0;font-size:15px}.fig{border-top:1px dashed #3d2a3b;margin-top:8px;padding-top:6px}.fig small{display:block}.chunk textarea{display:block}"
-             ".chunk input:not([type]){width:min(480px,90%)}.tools p{margin:8px 0}"
-             "@media(min-width:1100px){.prev{position:sticky;top:8px;float:right;margin-left:20px;width:380px}"
-             "form .chunk,form .tools{margin-right:410px}}")
+             ".prev img{width:100%;border-radius:8px;border:2px solid #3d2a3b;display:block;margin:10px 0}.prev{max-width:520px}"
+             ".chunk label{display:inline-block;margin:6px 10px 6px 0}.chunk select{width:auto}"
+             ".ticks label.tick,.choices label.tick{margin:2px 14px 2px 0;font-size:15px}.choices label.tick{display:block}"
+             ".fig{border-top:1px dashed #3d2a3b;margin-top:8px;padding-top:6px}.fig small{display:block}"
+             ".chunk textarea{display:block}.chunk input:not([type]){width:min(480px,90%)}.tools p{margin:8px 0}"
+             "@media(min-width:1100px){.prev{position:sticky;top:8px;float:right;margin-left:20px;width:420px;"
+             "max-height:calc(100vh - 16px);overflow:auto}form .chunks,form .tools{margin-right:450px}}")
     return frame("Tall picture", "🧱 Tall picture builder", body, saved, style=style)
 
 
@@ -235,6 +283,10 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
         c["cut"] = get("cut")
     if get("slope") in ("0", "1", "2"):
         c["slope"] = int(get("slope"))
+    if get("band") is not None:                 # the colour menu; "custom" takes the colour box next to it
+        want = str(get("bandhex") or "") if get("band") == "custom" else str(get("band"))
+        c["band"] = want if tall.band_colour({"band": want}) else ""
+    before = c.get("line")                      # to tell a newly picked ✨ choice from an edited remark (below)
     if t == "hero":
         for f in ("top", "title", "sub", "tag"):
             if get(f) is not None:
@@ -300,6 +352,10 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
                 c[field] = str(pick)[:kobold.MAX_CHARS]
             elif get(field) is not None:
                 c[field] = " ".join(str(get(field)).split())[:kobold.MAX_CHARS]
+    # a ✨ choice picked (radio): it goes in the Remark box, unless the box itself was edited in the same save
+    got, n = c.get("choices") or [], str(get("choice") or "")
+    if n.isdigit() and int(n) < len(got) and got[int(n)] != before and c.get("line") == before:
+        c["line"] = got[int(n)]
 
 
 def add_routes(app: web.Application, poster: Any) -> None:
@@ -383,10 +439,16 @@ def add_routes(app: web.Application, poster: Any) -> None:
                 note = f"Started from “{name}”."
             else:
                 note = "Pick a stack first."
-        elif verb == "ai" and i >= 0:           # ✨ one chunk's remark (the page waits for one request)
-            line, note = await recipes.write_line(poster, p, week, chunks[i])
-            if line:
-                chunks[i]["line"] = line
+        elif verb == "order":                   # cards dragged into a new order (panel.SCRIPT): "c3,c1,c2"
+            ids = [x for x in str(form.get("order") or "").split(",") if x]
+            by = {c["id"]: c for c in chunks}
+            if sorted(ids) == sorted(by):
+                chunks[:] = [by[x] for x in ids]
+                note = "Moved."
+        elif verb == "ai" and i >= 0:           # ✨ one chunk's remark: a few to pick from (the page waits)
+            got, note = await recipes.write_choices(poster, p, week, chunks[i])
+            if got:
+                chunks[i]["choices"], chunks[i]["line"] = got, got[0]
             anchor = cid
         elif verb == "aiall":
             store.put(dkey, p)                  # the posted menus first, then the writer re-reads the draft

@@ -11,6 +11,9 @@ and the owner's own text sections. For each section the owner can:
   * Regen: a calendar section is built again from the latest calendar (new streams, VODs, titles);
     a host section gets its template lines shuffled and, with KoboldCpp set up, new ✨ lines asked
     for in the background (flavrpromo/host_picker.py ``start_ai``, only that section's slots);
+  * the page saves itself as menus and tick boxes change and swaps in only what changed (flavrpromo/panel.py
+    SCRIPT; pictures carry ``stamp`` in their URL so only a changed one is drawn again); sections are folding
+    cards that can be dragged into a new order; a tall section can be copied;
   * "+ Add a tall section" (flavrpromo/recipes.py): a ready-made tall picture for the games of the week, one
     day in detail or one person's week, split over several pictures when it is long; its ✨ has KoboldCpp
     write each stream's / game's remark. "+ Add a tall picture" below is the empty stack to build by hand.
@@ -54,9 +57,11 @@ Who calls it: flavrpromo/__main__.py (``add_routes`` on the web server).
 from __future__ import annotations
 
 import html
+import json
 import random
 import re
 import time
+import zlib
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -288,8 +293,27 @@ def _refresh(p: Dict[str, Any], a: Dict[str, Any], only: str = "") -> str:
 
 
 # ── what each section looks like in the article ────────────────────────────
+_STAMP_SKIP = ("saved_at", "texts", "talls", "sections", "picks", "candidates", "ai", "ai_state", "ai_raw")
+
+
+def stamp(p: Dict[str, Any], part: str = "") -> int:
+    """A number for a picture's URL that changes only when that picture would: the draft's look (host, layouts,
+    pins, facts ...) plus what ``part`` itself shows (a host section's picked lines, a day's line, a tall
+    picture's chunks; "" = the cover). The editor saves itself as menus change (panel.SCRIPT) and swaps in
+    only the parts of the page whose HTML changed, so a picture is drawn again only when it has to be."""
+    base = {k: v for k, v in p.items() if k not in _STAMP_SKIP}
+    mine: Any = None
+    if part in HOST_SECTIONS:
+        mine = [host_picker.chosen(p, x) for x in _slots_of(part, p)]
+    elif part in (p.get("talls") or {}):
+        mine = p["talls"][part].get("chunks")
+    elif part:
+        mine = host_picker.chosen(p, part)
+    return zlib.crc32(json.dumps([base, mine], sort_keys=True, default=str).encode())
+
+
 def _pic_url(dkey: str, sec: str, p: Dict[str, Any]) -> str:
-    return f"/settings/article/picture?d={quote(dkey)}&sec={sec}&t={int(p.get('saved_at') or 0)}"
+    return f"/settings/article/picture?d={quote(dkey)}&sec={sec}&t={stamp(p, sec)}"
 
 
 def _pic_name(p: Dict[str, Any], sec: str) -> str:
@@ -319,10 +343,10 @@ def section_html(dkey: str, p: Dict[str, Any], s: Dict[str, Any]) -> str:
                                f"{'</i>' if i == len(rows) - 1 and i else ''}</p>" for i, x in enumerate(rows))
     if sid.startswith("day") and p.get("day_look", "host") == "host":
         # the snapshot's board-look day picture (/calendar/day.png...day=N) → the host's look
-        url = f"/settings/article/day?d={quote(dkey)}&day={sid[3:]}&t={int(p.get('saved_at') or 0)}"
+        url = f"/settings/article/day?d={quote(dkey)}&day={sid[3:]}&t={stamp(p, sid)}"
         return re.sub(r'/calendar/day\.png[^"]*?day=\d', html.escape(url, quote=True), s.get("html") or "")
     if sid in (p.get("talls") or {}):
-        url = html.escape(f"/settings/tall/picture?d={quote(dkey)}&t={sid}&v={int(p.get('saved_at') or 0)}", quote=True)
+        url = html.escape(f"/settings/tall/picture?d={quote(dkey)}&t={sid}&v={stamp(p, sid)}", quote=True)
         return (f'<div class="nocopy"><img src="{url}" alt="tall picture">'
                 f'<p>Tall picture · <a href="{url}" download="{sid}.png">Save</a> · put it here with X\'s picture button</p></div>')
     if sid in (p.get("texts") or {}):
@@ -429,16 +453,20 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
             n = len(p["talls"][sid]["chunks"])
             buttons += ((f'<button name=action value="aitall:{sid}" class=alt>✨ Write remarks</button> '
                          if ai_on and any(c["type"] in recipes.LINE_TYPES for c in p["talls"][sid]["chunks"]) else "")
-                        + f'<button name=action value="remove:{sid}" class=alt>Remove</button>')
+                        + f'<button name=action value="copy:{sid}" class=alt>Copy</button> '
+                        f'<button name=action value="remove:{sid}" class=alt>Remove</button>')
             body = (f'<p><a class=btn href="/settings/tall?d={quote(dkey)}&t={sid}">🧱 Edit the chunks ({n}, '
                     f'{tall.total(p["talls"][sid]["chunks"])} px tall)</a></p><div class=box>{section_html(dkey, p, s)}</div>')
         else:
             buttons += f'<button name=action value="remove:{sid}" class=alt>Remove</button>'
             body = (f'<textarea name="text_{sid}" rows=4 maxlength={MAX_TEXT} placeholder="Your own words. '
                     f'A blank line starts a new paragraph.">{_e(p["texts"][sid])}</textarea>')
-        secs.append(f'<section class="sec{"" if s.get("on") else " off"}" id="s-{sid}"><div class=head>'
-                    f'<label><input type=checkbox name="on_{sid}" value=1{" checked" if s.get("on") else ""}> '
-                    f'<b>{_e(s["title"])}</b> <small class=kind>{kind}</small></label><span>{buttons}</span></div>{body}</section>')
+        # a folding card: the bar (drag it to reorder; ↑ ↓ still work) and, inside, the part that is swapped in
+        # again after a live save when its HTML changed (panel.SCRIPT: data-swap)
+        secs.append(f'<details class="card sec" id="s-{sid}" open><summary><span class=grip title="drag to reorder">⠿</span>'
+                    f'<input type=checkbox name="on_{sid}" value=1{" checked" if s.get("on") else ""} title="in the article">'
+                    f'<b>{_e(s["title"])}</b> <small class=kind>{kind}</small><span class=acts>{buttons}</span></summary>'
+                    f'<div class=inner data-swap=rebuild data-swap-id="sec-{sid}">{body}</div></details>')
     hopts = "".join(f'<option value="{k}"{" selected" if k == p["host"] else ""}>{_e(x["emoji"])} {_e(x["name"])}</option>'
                     for k, x in hosts.HOSTS.items())
     ai_note = (f'<p class=ai>✨ KoboldCpp: {_e(host_picker.AI_STATES.get(p.get("ai_state") or "", "ready"))}</p>'
@@ -457,31 +485,38 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
     fig = p.get("cover_figure", "happy")
     fopts = "".join(f'<option value="{k}"{" selected" if k == fig else ""}>{_e(k.replace("_", " "))}</option>'
                     for k, v in hosts.pictures(p["host"]).items() if v and k not in ("head", "chibi_head"))
-    cover = (f'<div class=covrow><p>Cover <select name=cover_look>{copts}</select> '
+    cover = (f'<div class=covrow><p class=inline>Cover <select name=cover_look>{copts}</select> '
              + (f'<select name=cover_figure>{fopts}</select> ' if cov == "host" else "")
-             + f'<button name=action value=save class=alt>Apply</button></p>'
+             + f'</p>'
              f'<img class=cov src="{_e(_cover_url(dkey, p))}" alt="cover" loading=lazy></div>')
-    head = (f'<p>Host <select name=host>{hopts}</select> <button name=action value=host class=alt>Change host</button> '
-            f'<small>Changing the host gives new lines for both host sections and the day pictures.</small></p>'
-            f'<p>Day pictures <select name=day_look>{lopts}</select> <select name=day_layout>{alls}</select> <button name=action value=save class=alt>Apply</button></p>{cover}{ai_note}'
-            f'{_variation_picker(p)}{_recipe_row(week, poster.store)}'
+    # two folding cards on top: the look (live: the cover and the menus are swapped in again after a save) and
+    # what can be added (data-nolive: these menus only matter with their own button)
+    head = (f'<details class=card id=look open><summary><b>🎨 Look</b> <span class=what>host, day pictures, cover, '
+            f'which pool pictures</span></summary><div class=inner>'
+            f'<p class=inline data-nolive>Host <select name=host>{hopts}</select> <button name=action value=host class=alt>'
+            f'Change host</button> <small>Changing the host gives new lines for both host sections and the day pictures.</small></p>'
+            f'<div data-swap=rebuild data-swap-id=look><p class=inline>Day pictures <select name=day_look>{lopts}</select> '
+            f'<select name=day_layout>{alls}</select></p>{cover}{ai_note}{_variation_picker(p)}</div></div></details>'
+            f'<details class=card id=add open><summary><b>➕ Add to the article</b> <span class=what>tall sections, your own '
+            f'text, a fresh calendar</span></summary><div class=inner data-nolive>{_recipe_row(week, poster.store)}'
             f'<p class=help>Calendar sections are as of {built}. <button name=action value=regen_all class=alt>↻ Regen every '
             f'calendar section</button> <button name=action value=add_text class=alt>+ Add a text section</button> '
-            f'<button name=action value=reset class=alt>Start over</button></p>')
+            f'<button name=action value=reset class=alt>Start over</button></p></div></details>')
     view = f'/settings/article/view?d={quote(dkey)}'
     body = (_picker(poster.store, p["group"], p["which"])
-            + f'<form method=post action=/settings/article><input type=hidden name=d value="{_e(dkey)}">{head}'
-            + "".join(secs)
-            + f'<p class=bar><button name=action value=save>Save</button> '
+            + f'<form method=post action=/settings/article data-live data-foldkey="{_e(dkey)}">'
+              f'<input type=hidden name=d value="{_e(dkey)}"><input type=hidden name=order value="">{head}'
+            + f'<div class=secs data-draglist>{"".join(secs)}</div>'
+            + f'<p class=bar><button name=action value=save>Save</button> <span class=livestatus>Changes save on their own.</span> <button type=button class=link data-foldall=close>Fold all</button><button type=button class=link data-foldall=open>Open all</button> '
               f'<a class=btn href="{view}" target=_blank>Open the finished article ↗</a></p></form>')
     style = (".variations{border:1px solid #3d2a3b;border-radius:10px;padding:6px 12px;margin:10px 0}"
              ".varrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0}.varrow b{width:110px}"
              ".var{display:inline-flex;align-items:center;gap:3px;margin:0}.var img{width:56px;height:56px;object-fit:contain;"
              "background:#0e0f14;border-radius:6px}"
              ".row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}.row label{margin:0}.row select{width:auto}"
-             ".sec{border:1px solid #555;border-radius:10px;padding:10px 14px;margin:12px 0;border-bottom:1px solid #555}"
-             ".sec.off{opacity:.55}.head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center}"
-             ".head label{margin:0}.kind{display:inline;color:#889}.box{background:#fff;color:#111;border-radius:8px;"
+             "details.sec:has(>summary input[type=checkbox]:not(:checked)){opacity:.55}"
+             ".kind{display:inline;color:#889}.recipe select,.recipe input{width:auto}.recipe label{display:inline-block;margin:0 6px}"
+             ".box{background:#fff;color:#111;border-radius:8px;"
              "padding:10px 16px;margin-top:8px}.box a{color:#1d9bf0}.box img{max-width:100%;border-radius:6px}"
              ".box .nocopy{font-size:13px;color:#667}.two{display:grid;grid-template-columns:3fr 2fr;gap:14px}"
              "@media(max-width:800px){.two{grid-template-columns:1fr}}.hostpic{width:100%;border-radius:8px;margin-top:8px;"
@@ -491,7 +526,7 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
              "padding:10px 0;margin:0}button[disabled]{opacity:.35}legend .mini{padding:2px 9px;margin-left:4px;font-size:14px}"
              ".cov{width:min(600px,100%);border-radius:8px;display:block}")
     # ✨ waits for KoboldCpp (one request): show that it's working instead of a page that looks stuck
-    body += ("<script>document.querySelector('form[method=post]').addEventListener('submit',e=>{const b=e.submitter;"
+    body += ("<script>document.querySelector('form[data-live]').addEventListener('submit',e=>{const b=e.submitter;"
              "if(b&&/^(ask|ai):/.test(b.value)){b.textContent='✨ writing… (up to a minute)';"
              "setTimeout(()=>document.querySelectorAll('button').forEach(x=>x.disabled=true),0)}});</script>")
     return frame("Article editor", "📰 Article editor", body, saved, style)
@@ -547,7 +582,7 @@ def _variation_picker(p: Dict[str, Any]) -> str:
 def _cover_url(dkey: str, p: Dict[str, Any]) -> str:
     """The cover picture for the page and the copy page: the host's look, or the board's."""
     if p.get("cover_look", "host") == "host":
-        return f"/settings/article/cover?d={quote(dkey)}&t={int(p.get('saved_at') or 0)}"
+        return f"/settings/article/cover?d={quote(dkey)}&t={stamp(p)}"
     return "/calendar/cover.png" + article_query(p["group"], p.get("label") or "", int(p.get("off") or 0))
 
 
@@ -672,6 +707,19 @@ def add_routes(app: web.Application, poster: Any) -> None:
             at = next((i for i, s in enumerate(p["sections"]) if s["id"] == "outro"), len(p["sections"]))
             p["sections"].insert(at, {"id": sid, "title": f"Tall picture {n}" if not name or name == "Week overview" else name, "on": True})
             note, anchor = "Added a tall picture (before the outro). Open its chunks to build it.", sid
+        elif verb == "order":                   # cards dragged into a new order (panel.SCRIPT): "s-intro,s-day1,..."
+            ids = [x[2:] for x in str(form.get("order") or "").split(",") if x.startswith("s-")]
+            by = {x["id"]: x for x in p["sections"]}
+            if sorted(ids) == sorted(by):
+                p["sections"] = [by[x] for x in ids]
+                note = "Moved."
+        elif verb == "copy" and sid in (p.get("talls") or {}):      # a second copy of a tall section, to vary
+            new_id = recipes.next_tall_id(p)
+            p["talls"][new_id] = {"chunks": json.loads(json.dumps(p["talls"][sid]["chunks"]))}
+            at = next(i for i, x in enumerate(p["sections"]) if x["id"] == sid)
+            title = next(x["title"] for x in p["sections"] if x["id"] == sid)
+            p["sections"].insert(at + 1, {"id": new_id, "title": f"{title} (copy)", "on": True})
+            note, anchor = "Copied; the copy sits right under it.", new_id
         elif verb == "add_recipe":
             week, _ = await _article(poster, p)
             which_recipe = str(form.get("recipe") or "")
