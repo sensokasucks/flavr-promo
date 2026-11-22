@@ -381,7 +381,7 @@ def test_the_other_article_styles_are_native_chunks(tmp_path):
                 return [t for d in self.days for t in d]
 
         day = [tile(i, f"Person{i}", 3600 * (i + 1)) for i in range(7)]
-        week = Week(days=[day], day_name=lambda i: "MONDAY", tz=None, recap=True)
+        week = Week(days=[day], day_name=lambda i: "MONDAY", tz=None, recap=True, stream_count=7, hours_live=28.4)
         notes = [{"label": "LONGEST STREAM", "value": "Person6 · 7 h"}, {"label": "MOST SHOWS", "value": "Person1 · 5"}]
         ctx = {"host": "colette", "week": week, "img": lambda u: "", "notes": notes, "facts": {}, "heading": "H", "range": "R", "seed": 1,
                "pins": {}, "comments": ["approved for the highlight reel", ""]}
@@ -408,7 +408,30 @@ def test_the_other_article_styles_are_native_chunks(tmp_path):
         assert "No people on the calendar yet." in draw(tall.new_chunk("people", [], size=1), week=SimpleNamespace(days=[[]], day_name=lambda i: "", tz=None))
         # a colour scheme reaches them, and the built-in stacks using them fit
         assert tall.schemes.get("ocean")["notes"][1] in draw(tall.new_chunk("people", [], size=1), scheme="ocean")
-        for name in ("Week in cards", "Day spotlight"):
+        for name in ("Week in cards", "Day spotlight", "Opener and desk"):
             assert tall.total(tall.BUILTIN[name]) <= tall.MAX_H, name
+        # the reply note: the other host's answer in their own look (the opener's), the chunk's words over the article's
+        ctx2 = dict(ctx, reply="the kettle is on", desk={"line": "great week", "nudge": "post Sunday", "signoff": "see you Monday"})
+        memo = tall.document([tall.new_chunk("memo", [], size=1)], ctx2)
+        assert "COLETTE SAYS" not in memo and "MEMO FROM CLARK" in memo and "the kettle is on" in memo     # Colette's picture: Clark answers
+        assert "COLETTE SAYS" in tall.document([tall.new_chunk("memo", [])], dict(ctx2, host="clark"))
+        assert "my own" in tall.document([tall.new_chunk("memo", [], line="my own", host="colette")], ctx2) and "COLETTE SAYS" in tall.document([tall.new_chunk("memo", [], host="colette")], ctx2)
+        assert "Write the reply" in tall.document([tall.new_chunk("memo", [])], ctx)                          # nothing to say yet
+        # the desk card: bubble + sticky note + sign-off for Colette, closing notes paper for Clark
+        desk = tall.document([tall.new_chunk("desk", [], size=1)], ctx2)
+        assert "FROM COLETTE" in desk and "great week" in desk and "To do for next time" in desk and "see you Monday" in desk
+        clark = tall.document([tall.new_chunk("desk", [], size=1, nudge="my nudge")], dict(ctx2, host="clark"))
+        assert "Closing notes" in clark and "great week" in clark and "my nudge" in clark and "post Sunday" not in clark
+        assert "Write the desk lines" in tall.document([tall.new_chunk("desk", [], size=1)], ctx)
+        # strips for game chunks (same colours and swing as the stream strips) and the cover's title block on a header
+        games = {"g": {"game": "G", "streams": 3, "people": ["Person1"], "tags": ["new"]}}
+        gs = tall.document([tall.new_chunk("game", [], size=1, game="G", look="strip", line="nice")] * 2, dict(ctx, games=games))
+        assert gs.count("NEW GAME") == 2 and "“nice”" in gs and "Person1 · 3 streams" in gs and "margin-left:180px" in gs
+        assert "margin-left:180px" not in tall.document([tall.new_chunk("game", [], size=1, game="G", look="strip")], dict(ctx, games=games))
+        cover = tall.document([tall.new_chunk("header", [], size=1, look="cover")], ctx)
+        assert "7 streams · 28 hours live" in cover and "<img" in cover
+        assert "1 stream this week" in tall.document([tall.new_chunk("header", [], size=1, look="cover")], dict(ctx, week=Week(days=[[day[0]]], day_name=lambda i: "", tz=None)))
+        assert "FILED BY CLARK" in tall.document([tall.new_chunk("header", [], size=1, look="cover")], dict(ctx, host="clark"))
+        assert "FILED BY CLARK" not in tall.document([tall.new_chunk("header", [], size=1)], dict(ctx, host="clark"))
     finally:
         hosts.init(None)

@@ -74,11 +74,11 @@ import html
 import math
 from typing import Any, Dict, List, Tuple
 
-from . import hosts, schemes
+from . import host_cards, hosts, schemes
 from .render import COVER_PICS, PLATFORM_BADGE, clock, cover_people, cover_stats, hm, logo_data_url
 
 CHUNKS_KEY, TEMPLATES_KEY = "tall_chunks", "tall_templates"   # kv: saved chunks {name: chunk}, saved stacks {name: [chunk]}
-WEEK_FIELDS = ("ref", "game", "line", "lines", "hint")   # what belongs to one week: a stack saved as a template drops these
+WEEK_FIELDS = ("ref", "game", "line", "lines", "hint", "nudge", "signoff")   # what belongs to one week: a stack saved as a template drops these
 WIDTH = 1600
 MAX_H = 2133                         # px: the tallest picture X shows whole (3:4 at this width)
 # type → (label, heights small / medium / large in px)
@@ -91,6 +91,8 @@ TYPES: Dict[str, Any] = {
     "people": ("People cards (the cover's)", (310, 620, 700)),
     "grid": ("A day's pictures", (400, 540, 700)),
     "quote": ("Big line", (170, 220, 300)),
+    "memo": ("Reply note (the other host's)", (150, 210, 280)),
+    "desk": ("Desk card (closing notes)", (360, 480, 600)),
     "hero": ("Hero opening", (420, 520, 640)),
     "chat": ("Chat bubbles", (300, 420, 560)),
     "footer": ("Sign-off strip", (260, 340, 440)),
@@ -115,7 +117,8 @@ BAND_COLOURS = {"plum": ("Plum", "#2a0f2a"), "berry": ("Berry", "#521b4c"), "win
 GRID_LAYOUTS = {"": "Polaroid wall", "spotlight": "Spotlight (the longest stream big)", "timeline": "Timeline (strips in time order)",
                 "columns": "Two columns of strips", "cards": "Colour cards"}     # a grid chunk's ``layout`` (host_cards.DAY_LAYOUTS)
 STATS_LOOKS = {"": "Cards", "notes": "Sticky notes (like the opener's)"}           # a stats chunk's ``look``
-LOOKS = {"": "Plain row", "strip": "Colour strip (like the day pictures)"}     # a stream chunk's ``look``
+LOOKS = {"": "Plain row", "strip": "Colour strip (like the day pictures)"}     # a stream or game chunk's ``look``
+HEADER_LOOKS = {"": "Title bar", "cover": "Cover title block (logo, big title, tilted numbers note)"}   # a header chunk's ``look``
 SPOT_MAX = 5                         # small frames beside the big one on a spotlight grid chunk
 STRIP_SWING = 180                    # px a strip steps in from the left when it swings (every other one), as the day pictures do
 PIC_TYPES = ("header", "stats", "grid", "quote")      # chunk types whose host picture is optional (``pic``)
@@ -164,7 +167,9 @@ def new_chunk(ctype: str, existing: List[Dict[str, Any]], **fields: Any) -> Dict
     defaults = {"header": {"title": "", "sub": ""},
                 "host": {"host": "", "kind": "happy", "var": "", "side": "left", "line": ""},
                 "stream": {"ref": "", "line": "", "host": "", "kind": "happy", "var": ""},
-                "game": {"game": "", "line": "", "host": "", "kind": "happy", "var": ""}, "stats": {}, "people": {}, "grid": {"day": 0}, "quote": {"text": ""},
+                "game": {"game": "", "line": "", "host": "", "kind": "happy", "var": ""}, "stats": {},
+                "memo": {"host": "", "line": ""},
+                "desk": {"host": "", "kind": "desk", "var": "", "line": "", "nudge": "", "signoff": ""}, "people": {}, "grid": {"day": 0}, "quote": {"text": ""},
                 "footer": {"host": "", "kind": "chibi_happy", "var": "", "line": ""},
                 "hero": {"top": "Meet", "title": "", "sub": "", "tag": "", "host": "", "kind": "happy", "var": ""},
                 "chat": {"lines": "", "host": "", "other": ""}}
@@ -221,6 +226,12 @@ BUILTIN: Dict[str, List[Dict[str, Any]]] = {
         {"id": "c2", "type": "people", "size": 1},
         {"id": "c3", "type": "stats", "size": 1, "look": "notes"},
         {"id": "c4", "type": "footer", "size": 0, "host": "", "kind": "chibi_happy", "var": "", "line": ""},
+    ],
+    "Opener and desk": [                # the article's opener and closing card as chunks (set the reply and desk lines on them,
+        {"id": "c1", "type": "header", "size": 1, "look": "cover", "title": "", "sub": ""},     # or leave them empty to use the article's)
+        {"id": "c2", "type": "stats", "size": 1, "look": "notes"},
+        {"id": "c3", "type": "memo", "size": 1, "host": "", "line": ""},
+        {"id": "c4", "type": "desk", "size": 1, "host": "", "kind": "desk", "var": "", "line": "", "nudge": "", "signoff": ""},
     ],
     "Day spotlight": [                  # a day with its longest stream big (set the day on the chunk)
         {"id": "c1", "type": "header", "size": 0, "title": "", "sub": ""},
@@ -327,7 +338,7 @@ def _num(c: Dict[str, Any], field: str) -> int:
 def has_figure(c: Dict[str, Any]) -> bool:
     """Whether the chunk shows a host picture (so the builder offers its size / rotate / flip controls)."""
     t = c.get("type")
-    return t in ("host", "footer", "hero") or (t in SHOW and shown(c, "host")) or (t in PIC_TYPES and bool(c.get("pic")))
+    return t in ("host", "footer", "hero", "desk") or (t in SHOW and shown(c, "host")) or (t in PIC_TYPES and bool(c.get("pic")))
 
 
 def figure(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> Dict[str, Any]:
@@ -630,6 +641,112 @@ def _grid(c: Dict[str, Any], ctx: Dict[str, Any], h: int, box: str) -> str:
     return f'<div style="{box}padding-top:18px">{head}{body}</div>'
 
 
+def _cover_title(title: str, sub: str, ctx: Dict[str, Any], h: int, box: str) -> str:
+    """A header chunk in the "cover" look: the X cover's title block (host_cards.cover): Colette's logo, the heading in
+    big capitals, the date range and the numbers on a tilted sticky note; Clark's "FILED BY CLARK" line, a big orange
+    heading and a cream label. The numbers are the week's own (as the cover counts them)."""
+    th, week, clark = ctx["theme"], ctx["week"], ctx["host"] == "clark"
+    if getattr(week, "recap", False):
+        stats = f"{week.stream_count} streams · {week.hours_live:.0f} hours live"
+    elif hasattr(week, "days"):
+        n = sum(len(d) for d in week.days)
+        stats = f"{n} stream{'' if n == 1 else 's'} this week"
+    else:
+        stats = ""
+    big = max(34, min(64, h // 3))
+    note = (f'<div style="margin-left:auto;flex:none;background:{"#f4ead8" if clark else _strip_colours(ctx)[0]};color:{th["ink"]};'
+            f'padding:12px 20px;font-size:{max(20, big // 2)}px;font-weight:800;border-radius:{4 if clark else 0}px;'
+            f'transform:rotate({0 if clark else -2}deg);box-shadow:4px 6px 14px #0008">{_e(stats)}</div>') if stats else ""
+    if clark:
+        return (f'<div style="{box}display:flex;align-items:center;gap:40px"><div><div style="font-size:20px;letter-spacing:3px;'
+                f'color:{th["gold"]}">FLAVR · FILED BY CLARK</div><div style="font-size:{big}px;color:{th["accent"]};line-height:1.05;'
+                f'margin-top:8px">{_e(title)}</div><div style="font-size:{max(22, big // 2)}px;margin-top:8px">{_e(sub)}</div></div>{note}</div>')
+    return (f'<div style="{box}display:flex;align-items:center;gap:34px"><img src="{logo_data_url()}" style="height:{max(70, h - 80)}px">'
+            f'<div><div style="font-size:{big}px;font-weight:900;letter-spacing:2px;line-height:1.05;text-transform:uppercase">{_e(title)}</div>'
+            f'<div style="font-size:{max(22, big // 2)}px;color:{th["gold"]};font-weight:800;margin-top:8px">{_e(sub)}</div></div>{note}</div>')
+
+
+def _game_strip(c: Dict[str, Any], ctx: Dict[str, Any], h: int, g: str, row: Dict[str, Any], info: Dict[str, Any], box: str) -> str:
+    """A game chunk in the "strip" look: one colour strip (colour and swing by ``ctx["strip_k"]``, like ``_strip_row``)
+    with a pill (NEW GAME / PART 4 / the number of streams), the game's name, who played it, its genre and the remark."""
+    th, clark = ctx["theme"], ctx["host"] == "clark"
+    k = int(ctx.get("strip_k") or 0)
+    flip = k % 2 == 1
+    sh = max(60, h - 30)
+    fs = max(18, min(34, sh // 6))
+    fig = figure(c, ctx, h)
+    width = WIDTH - 140 - STRIP_SWING - (fig["room"] if fig else 0)
+    n = int(row.get("streams") or 0)
+    tags = tag_words(row.get("tags") or []) if shown(c, "tags") else []
+    pill = tags[0] if tags else f"{n} stream{'' if n == 1 else 's'}" if n and shown(c, "count") else ""
+    chip = (f'<div style="flex:none;width:{int(fs * 6.6)}px;background:{th["accent"]};color:#fff;font-size:{fs - 4}px;font-weight:900;'
+            f'white-space:nowrap;text-align:center;padding:6px 0;border-radius:{6 if clark else 30}px">{_e(pill)}</div>') if pill else ""
+    meta = " · ".join(x for x in (", ".join(row.get("people") or []) if shown(c, "people") else "",
+                                  f"{n} stream{'' if n == 1 else 's'}" if shown(c, "count") and n and tags else "") if x)
+    genre = ", ".join(info.get("genres") or [])
+    text = (f'<div style="flex:1;min-width:0"><div style="font-size:{fs + 8}px;font-weight:900;white-space:nowrap;overflow:hidden;'
+            f'text-overflow:ellipsis">{_e(g)}</div>'
+            + (f'<div style="font-size:{fs - 6}px;font-weight:800;opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+               f'{_e(meta)}</div>' if meta else "")
+            + (f'<div style="font-size:{fs - 7}px;font-weight:900;letter-spacing:2px;text-transform:uppercase;color:{th["accent"]}">'
+               f'{_e(genre)}</div>' if shown(c, "genre") and genre else "")
+            + (f'<div style="margin-top:4px;font-size:{fs - 4}px;font-weight:700;display:-webkit-box;-webkit-line-clamp:2;'
+               f'-webkit-box-orient:vertical;overflow:hidden">“{_e(c["line"])}”</div>' if shown(c, "line") and c.get("line") else "")
+            + '</div>')
+    pal = _strip_colours(ctx)
+    tilt = 0.0 if clark else (-0.6 if flip else 0.5)
+    return (f'<div style="{box}display:flex;align-items:center"><div style="display:flex;align-items:center;gap:22px;flex:none;'
+            f'width:{width}px;height:{sh}px;margin-left:{STRIP_SWING if flip else 0}px;padding:8px 24px;background:{pal[k % len(pal)]};'
+            f'color:{th["ink"]};border-radius:{4 if clark else 0}px;transform:rotate({tilt}deg);box-shadow:3px 5px 12px #0007">'
+            f'{(text + chip) if flip else (chip + text)}</div></div>')
+
+
+def _memo(c: Dict[str, Any], ctx: Dict[str, Any], h: int, box: str) -> str:
+    """The reply note chunk: the OTHER host's answer in their own look (host_cards._reply: Colette's pink sticky note,
+    Clark's cream memo, each with their head). Words: the chunk's own ``line``, else the article's picked reply
+    (ctx["reply"], the opener's). ``host`` = who says it (blank = the host who is not the picture's)."""
+    who = c.get("host") if c.get("host") in hosts.HOSTS else hosts.other(ctx["host"])
+    text = c.get("line") or ctx.get("reply") or ""
+    if not text:
+        return (f'<div style="{box}display:flex;align-items:center;font-size:30px;color:{ctx["theme"]["gold"]}">'
+                f'Write the reply in the builder (or pick one on the article page).</div>')
+    return (f'<div style="{box}display:flex;align-items:center;justify-content:center">'
+            f'{host_cards._reply(who, text, "position:static;width:1250px")}</div>')
+
+
+def _desk(c: Dict[str, Any], ctx: Dict[str, Any], h: int, box: str) -> str:
+    """The desk card chunk (host_cards.desk): Colette's "FROM COLETTE'S DESK" bubble, "To do for next time" sticky note
+    and sign-off; Clark's "Closing notes" paper and sign-off. Words: the chunk's own ``line`` / ``nudge`` /
+    ``signoff``, else the article's picked ones (ctx["desk"]). The host's desk picture stands at the left end
+    (``figure``; this chunk's room)."""
+    th, clark = ctx["theme"], ctx["host"] == "clark"
+    got = ctx.get("desk") or {}
+    line, nudge, sign = (c.get("line") or got.get("line") or "", c.get("nudge") or got.get("nudge") or "",
+                         c.get("signoff") or got.get("signoff") or "")
+    fig = figure(c, ctx, h)
+    room = f'<div style="width:{fig["room"]}px;flex:none"></div>' if fig else ""
+    f = min(1.0, h / 420)
+    if not (line or nudge or sign):
+        return (f'<div style="{box}display:flex;align-items:center;font-size:30px;color:{th["gold"]}">'
+                f'Write the desk lines in the builder (or pick them on the article page).</div>')
+    if clark:
+        paper = "<br><br>".join(_e(x) for x in (line, nudge) if x)
+        body = (f'<div style="font-size:{int(30 * f)}px;color:{th["accent"]}">Closing notes</div>'
+                f'<div style="margin-top:10px;background:{th["paper"]};color:{th["ink"]};padding:{int(26 * f)}px {int(34 * f)}px;'
+                f'font-size:{int(27 * f)}px;line-height:1.45;box-shadow:0 8px 24px #000a;border-radius:4px">{paper}</div>'
+                + (f'<div style="margin-top:12px;text-align:right;font-size:{int(32 * f)}px;color:{th["gold"]};font-style:italic">'
+                   f'{_e(sign)}</div>' if sign else ""))
+    else:
+        note = _strip_colours(ctx)[0]
+        body = (f'<div style="font-size:{int(26 * f)}px;color:{th["gold"]};font-weight:800;letter-spacing:2px">FROM COLETTE\'S DESK</div>'
+                + (_bubble(line, th, th["accent"], f"margin-top:12px;font-size:{int(27 * f)}px;padding:{int(20 * f)}px {int(30 * f)}px") if line else "")
+                + (f'<div style="margin-top:16px;width:70%;background:{note};color:{th["ink"]};padding:14px 22px;'
+                   f'font-size:{int(23 * f)}px;font-weight:700;transform:rotate(-2deg);box-shadow:4px 6px 14px #0008">'
+                   f'To do for next time:<br>☐ {_e(nudge)}</div>' if nudge else "")
+                + (f'<div style="margin-top:14px;font-size:{int(24 * f)}px;opacity:.85;font-style:italic">— {_e(sign)}</div>' if sign else ""))
+    return f'<div style="{box}display:flex;gap:40px;align-items:center">{room}<div style="flex:1;min-width:0">{body}</div></div>'
+
+
 def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
     """One chunk's content in a box ``h`` px tall (its height minus what a cut takes off the bottom)."""
     th, week, img = ctx["theme"], ctx["week"], ctx["img"]
@@ -638,6 +755,8 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
     if kind == "header":
         title = c.get("title") or ctx.get("heading") or ""
         sub = c.get("sub") or ctx.get("range") or ""
+        if c.get("look") == "cover":
+            return _cover_title(title, sub, ctx, h, box)
         logo = f'<img src="{logo_data_url()}" style="height:{max(70, h - 90)}px;margin-right:34px">' if ctx["host"] == "colette" else ""
         return (f'<div style="{box}display:flex;align-items:center">{logo}<div><div style="font-size:{min(78, h // 3)}px;'
                 f'font-weight:900;letter-spacing:3px;text-transform:uppercase">{_e(title)}</div>'
@@ -686,6 +805,8 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
                     f'Pick a game from the menu.</div>')
         row = (ctx.get("games") or {}).get(g.lower()) or {}
         info = (ctx.get("info") or {}).get(g.lower()) or {}
+        if c.get("look") == "strip":
+            return _game_strip(c, ctx, h, g, row, info, box)
         f = min(1.0, h / 230)
         n = int(row.get("streams") or 0)
         meta = " · ".join(x for x in (
@@ -750,6 +871,10 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
         return f'<div style="{box}display:flex;flex-wrap:wrap;gap:22px;align-content:center;justify-content:center">{cards}</div>'
     if kind == "grid":
         return _grid(c, ctx, h, box)
+    if kind == "memo":
+        return _memo(c, ctx, h, box)
+    if kind == "desk":
+        return _desk(c, ctx, h, box)
     if kind == "hero":
         key = _host_of(c, ctx)
         acc = _accent(key, ctx)
@@ -852,7 +977,7 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
         rows.append(f'<div style="position:absolute;left:0;top:{y - above}px;width:{WIDTH}px;height:{h + above}px;'
                     f'z-index:{n - i};{bg}{clip}"><div style="position:absolute;left:0;top:{above}px;width:{WIDTH}px;'
                     f'height:{h - d}px;overflow:hidden">{_draw(c, dict(ctx, strip_k=strips_before), h - d)}</div>{inside}</div>')
-        strips_before += c.get("type") == "stream" and c.get("look") == "strip"
+        strips_before += c.get("type") in ("stream", "game") and c.get("look") == "strip"
         y += h
     stripes = ""
     for bottom, d, kind, shaped in seams:
@@ -872,5 +997,5 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
             f'<div style="position:absolute;left:0;top:0;z-index:100">{pops}</div></body></html>')
 
 
-__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SHAPED", "TEETH", "teeth", "edge", "SLOPES", "cut_depth", "seam_up", "LOOKS", "GRID_LAYOUTS", "STATS_LOOKS", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
+__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SHAPED", "TEETH", "teeth", "edge", "SLOPES", "cut_depth", "seam_up", "LOOKS", "HEADER_LOOKS", "GRID_LAYOUTS", "STATS_LOOKS", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
            "tile_choices"]

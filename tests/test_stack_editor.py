@@ -185,6 +185,33 @@ async def test_the_tall_pictures_page_opens_a_stack_editor_directly(tmp_path):
             assert f'name="{gid}__layout"' in page and f'name="{nid}__look"' in page and "tilted colour cards" in page
             await c.get(f"/settings/tall/picture?d={dkey}&t=tall1")                   # all of them draw
             assert "TOP PICK" not in poster.shooter.docs[-1] and "📌" in poster.shooter.docs[-1]
+            # the reply note, the desk card, the cover's title block and game strips: menus, saved words, and they draw
+            ch, _ = await build("add", newtype="memo")
+            mid = ch[-1]["id"]
+            ch, _ = await build("save", **{f"{mid}__host": "colette", f"{mid}__line": "  my   reply "})
+            m = next(x for x in ch if x["id"] == mid)
+            assert m["host"] == "colette" and m["line"] == "my reply"
+            ch, _ = await build("save", **{f"{mid}__host": "nobody"})
+            assert next(x for x in ch if x["id"] == mid)["host"] == ""
+            ch, _ = await build("add", newtype="desk")
+            did = ch[-1]["id"]
+            ch, _ = await build("save", **{f"{did}__line": "nice week", f"{did}__nudge": "post Sunday", f"{did}__signoff": "bye"})
+            d = next(x for x in ch if x["id"] == did)
+            assert (d["line"], d["nudge"], d["signoff"]) == ("nice week", "post Sunday", "bye")
+            hid = next(x["id"] for x in ch if x["type"] == "header")
+            ch, _ = await build("save", **{f"{hid}__look": "cover"})
+            assert next(x for x in ch if x["id"] == hid)["look"] == "cover"
+            ch, _ = await build("save", **{f"{hid}__look": "zzz"})
+            assert next(x for x in ch if x["id"] == hid)["look"] == ""
+            ch, _ = await build("save", **{f"{hid}__look": "cover"})
+            ch, _ = await build("add", newtype="game")
+            gm = ch[-1]["id"]
+            ch, _ = await build("save", **{f"{gm}__look": "strip"})
+            assert next(x for x in ch if x["id"] == gm)["look"] == "strip"
+            page = await builder()
+            assert f'name="{mid}__host"' in page and f'name="{did}__nudge"' in page and f'name="{hid}__look"' in page and f'name="{gm}__look"' in page
+            await c.get(f"/settings/tall/picture?d={dkey}&t=tall1")
+            assert "my reply" in poster.shooter.docs[-1] and "post Sunday" in poster.shooter.docs[-1]
             # the article editor's recipe row and Look card offer it too
             page = await (await c.get("/settings/article?group=flavr&which=week")).text()
             assert "name=recipe_look" in page and "name=day_stream_look" in page

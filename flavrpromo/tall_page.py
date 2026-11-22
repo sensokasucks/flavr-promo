@@ -216,7 +216,8 @@ def _game_box(c: Dict[str, Any], week: Any, store: Any, igdb: bool) -> str:
 def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str], store: Any = None, igdb: bool = False) -> str:
     t, cid = c["type"], c["id"]
     if t == "header":
-        return (f'<label>Title <input name="{cid}__title" value="{_e(c.get("title"))}" placeholder="(the article heading)"></label>'
+        return (f'<label>Look <select name="{cid}__look">{_opts(tall.HEADER_LOOKS.items(), c.get("look") or "")}</select></label>'
+                f'<label>Title <input name="{cid}__title" value="{_e(c.get("title"))}" placeholder="(the article heading)"></label>'
                 f'<label>Line under it <input name="{cid}__sub" value="{_e(c.get("sub"))}" placeholder="(the date range)"></label>')
     if t in ("host", "footer"):
         side = (f'<label>Side <select name="{cid}__side">{_opts(tall.SIDES.items(), c.get("side") or "left")}</select></label>'
@@ -227,6 +228,19 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str], s
                 f'<p><button name=action value="ai:{cid}" class=alt>✨ Write the {what}</button> '
                 f'<small>(KoboldCpp reads the other chunks of this picture and writes a few that sum it up; '
                 f'the page waits for it)</small></p>')
+    if t == "memo":
+        who = [("", "The other host (not the stack's)")] + [(k, h["name"]) for k, h in hosts.HOSTS.items()]
+        return (f'<label>Who says it <select name="{cid}__host">{_opts(who, c.get("host") or "")}</select></label>'
+                + _line_field(c, "line", lines, "Their answer (empty = the article's picked reply)")
+                + '<small>Colette\'s pink sticky note or Clark\'s cream memo, each with their head; '
+                  'it is the opener\'s reply note.</small>')
+    if t == "desk":
+        return (_picture_menus(c, p) + _line_field(c, "line", lines, "Highlight (empty = the article's desk highlight)")
+                + f'<label>To do for next time <input name="{cid}__nudge" value="{_e(c.get("nudge"))}" maxlength={kobold.MAX_CHARS}'
+                  f' placeholder="(the article\'s nudge)"></label>'
+                  f'<label>Sign-off <input name="{cid}__signoff" value="{_e(c.get("signoff"))}" maxlength={kobold.MAX_CHARS}'
+                  f' placeholder="(the article\'s sign-off)"></label>'
+                  '<small>The closing desk card: Colette\'s bubble and sticky note, or Clark\'s closing notes paper.</small>')
     if t == "hero":
         return (f'<label>Small word on top <input name="{cid}__top" value="{_e(c.get("top"))}"></label>'
                 f'<label>Big title <input name="{cid}__title" value="{_e(c.get("title"))}" placeholder="(the host\'s first name)"></label>'
@@ -254,7 +268,7 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str], s
             names = [("", "(pick a game)")] + [(r["game"], r["game"]) for r in rows]
             pick = f'<label>Game <select name="{cid}__game">{_opts(names, c.get("game") or "")}</select></label>'
         looks = (f'<label>Look <select name="{cid}__look">{_opts(tall.LOOKS.items(), c.get("look") or "")}</select></label>'
-                 if t == "stream" else "")
+                 )
         ticks = "".join(f'<label class=tick><input type=checkbox name="{cid}__show_{k}" value=1'
                         f'{" checked" if tall.shown(c, k) else ""}> {_e(n)}</label>' for k, n in tall.SHOW[t].items())
         more = _picture_menus(c, p) if tall.shown(c, "host") else ""
@@ -295,6 +309,8 @@ def _what(c: Dict[str, Any], p: Dict[str, Any], week: Any) -> str:
         return str(c.get("lines") or "").split("\n")[0]
     if t == "people":
         return "the week's people"
+    if t == "memo":
+        return hosts.HOSTS[c["host"]]["name"] if c.get("host") in hosts.HOSTS else "the other host's reply"
     return str(c.get("title") or c.get("line") or c.get("text") or "")
 
 
@@ -472,11 +488,19 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
             c["other"] = get("other") if get("other") in hosts.HOSTS else ""
         if get("lines") is not None:
             c["lines"] = "\n".join(" ".join(x.split())[:kobold.MAX_CHARS] for x in str(get("lines")).splitlines() if x.strip())[:CHAT_MAX]
+    if t == "header" and get("look") is not None:       # the title bar or the cover's title block
+        c["look"] = get("look") if get("look") in tall.HEADER_LOOKS else ""
+    if t == "memo" and get("host") is not None:
+        c["host"] = get("host") if get("host") in hosts.HOSTS else ""
+    if t == "desk":                             # the desk card's two extra lines (its highlight is "line", below)
+        for f in ("nudge", "signoff"):
+            if get(f) is not None:
+                c[f] = " ".join(str(get(f)).split())[:kobold.MAX_CHARS]
     if t == "header":                           # only boxes that were sent: a post without them keeps the title
         for f in ("title", "sub"):
             if get(f) is not None:
                 c[f] = " ".join(str(get(f)).split())[:120]
-    if t in ("host", "footer", "hero"):
+    if t in ("host", "footer", "hero", "desk"):
         if get("host") is not None:
             c["host"] = get("host") if get("host") in hosts.HOSTS else ""
         if get("kind") in hosts.POOLED:
@@ -514,7 +538,7 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
         c["game"] = get("game") if get("game") in {r["game"] for r in recipes.game_rows(p.get("facts") or {}, week)} else ""
     if t in recipes.LINE_TYPES + recipes.SUMMARY_TYPES and get("hint") is not None:     # the owner's few words for ✨
         c["hint"] = " ".join(str(get("hint")).split())[:recipes.HINT_MAX]
-    if t == "stream" and get("look") is not None:       # the plain row or the colour strip (tall.LOOKS)
+    if t in ("stream", "game") and get("look") is not None:       # the plain row or the colour strip (tall.LOOKS)
         c["look"] = get("look") if get("look") in tall.LOOKS else ""
     if t in recipes.LINE_TYPES:
         if get("about") is not None:            # what ✨ writes about (recipes.ask_kind)
@@ -535,7 +559,7 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
     if t == "stats" and get("look") is not None:            # cards, or the opener's sticky notes
         c["look"] = get("look") if get("look") in tall.STATS_LOOKS else ""
     for field in ("line", "text"):
-        if field in c or (field == "line" and t in ("host", "footer", "stream")) or (field == "text" and t == "quote"):
+        if field in c or (field == "line" and t in ("host", "footer", "stream", "memo", "desk")) or (field == "text" and t == "quote"):
             pick = get(f"pick_{field}")
             if pick:
                 c[field] = str(pick)[:kobold.MAX_CHARS]
@@ -828,6 +852,10 @@ def add_routes(app: web.Application, poster: Any) -> None:
                "seed": p.get("seed"), "pins": p.get("pins"), "scheme": article_editor.scheme_for(p, tid),
                # the host's picked comment on each highlight (the opener's), for the sticky-note look of a stats chunk
                "comments": [host_picker.chosen(p, f"note{i}") for i in range(len(p.get("notes") or []))],
+               # the article's picked reply (the opener's) and desk lines, for the memo and desk chunks that have none of their own
+               "reply": host_picker.chosen(p, "reply"),
+               "desk": {"line": host_picker.chosen(p, "desk_highlight"), "nudge": host_picker.chosen(p, "desk_nudge"),
+                        "signoff": host_picker.chosen(p, "desk_signoff")},
                **recipes.drawing_context(store, p, week, chunks)}
         png = await poster.shooter.png(tall.document(chunks, ctx), size=(tall.WIDTH, max(1, tall.total(chunks))))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})

@@ -391,13 +391,13 @@ def apply_seams(chunks: List[Dict[str, Any]], seams: str) -> None:
 
 
 def apply_look(chunks: List[Dict[str, Any]], look: str) -> None:
-    """Give every stream chunk of a stack the same ``look`` (a tall.LOOKS key: "" the plain row, "strip" the
+    """Give every stream and game chunk of a stack the same ``look`` (a tall.LOOKS key: "" the plain row, "strip" the
     colour strip of the day pictures). Other chunk types and an unknown key are left alone. Used by the
     recipes and by the builder's Look card (flavrpromo/tall_page.py "looks")."""
     if look not in tall.LOOKS:
         return
     for c in chunks:
-        if c.get("type") == "stream":
+        if c.get("type") in ("stream", "game"):
             c["look"] = look
 
 

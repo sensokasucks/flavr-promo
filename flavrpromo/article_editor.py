@@ -417,6 +417,8 @@ def stamp(p: Dict[str, Any], part: str = "") -> int:
         mine = [p["talls"][part].get("chunks"), p["talls"][part].get("host") or ""]
         if any(c.get("type") == "stats" and c.get("look") == "notes" for c in p["talls"][part].get("chunks") or []):
             mine.append([host_picker.chosen(p, f"note{i}") for i in range(len(p.get("notes") or []))])    # the sticky notes' comments
+        if any(c.get("type") in ("memo", "desk") for c in p["talls"][part].get("chunks") or []):    # the picked reply and desk lines
+            mine.append([host_picker.chosen(p, x) for x in ("reply", "desk_highlight", "desk_nudge", "desk_signoff")])
     elif part:
         mine = host_picker.chosen(p, part)
     return zlib.crc32(json.dumps([base, mine], sort_keys=True, default=str).encode())
