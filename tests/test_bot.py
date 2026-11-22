@@ -25,7 +25,7 @@ async def test_commands_register():
         cmd = next(c for c in cal.commands if c.name == name)
         assert "when" in [p.name for p in cmd.parameters], name
     # only the calendar / go-live / reports commands: Stream Core's and server care's stayed in FlaVR Bot
-    assert names == ["calendar", "community", "friend", "group", "host", "live", "me", "pings", "schedule", "setup", "status", "talent"]
+    assert names == ["calendar", "collab", "community", "friend", "group", "host", "live", "me", "pings", "schedule", "setup", "status", "talent"]
     me = next(c for c in bot.tree.get_commands() if c.name == "me")
     assert sorted(c.name for c in me.commands) == ["hide", "main", "posts", "schedule", "share", "signoff", "unschedule", "x"]
     friend = next(c for c in bot.tree.get_commands() if c.name == "friend")
@@ -45,7 +45,7 @@ async def test_commands_register():
                                                       "share-style", "youtube-check"]
     pings = next(c for c in bot.tree.get_commands() if c.name == "pings")
     kind = next(p for p in next(c for c in pings.commands if c.name == "set").parameters if p.name == "kind")
-    assert sorted(ch.value for ch in kind.choices) == ["calendar", "friends", "share"]
+    assert sorted(ch.value for ch in kind.choices) == ["calendar", "collab", "friends", "share"]
     # /calendar view, post and share take a review (Friday week / Monday weekend, Sen 2026-11-20)
     for name in ("view", "post", "share"):
         cmd = next(c for c in cal.commands if c.name == name)

@@ -15,6 +15,11 @@ Looks (decided with the owner, plan doc "Weekly FlaVR calendar plan"):
   FlaVR    the logo + its colours: pink #f72ca2, lime #b7ef33, yellow #f8cf33, teal #2ae0d4; day
            numbers cycle through them; today outlined teal with a yellow TODAY tag
   Friends  the same layout in plain teal with a text title, so the two never get mixed up
+  Collabs  a confirmed collab (flavrpromo/collabs.py, Tile.collab; owner 2026-11-22 "a special
+           highlight on the calendars") is gold whatever the group's colours (COLLAB): a glowing
+           border and a COLLAB tag on big tiles plus a "with FlaVR" line; rows and slim rows get the
+           gold edge and "with ..." in front of the game (their height is measured, so no new line);
+           the day / focus pictures (``tiles_card``) get the gold frame, tag and "with ..." line.
   Each day column picks its own size so it fills down to the bottom edge: up to BIG_TILES streams
   get big picture tiles, up to COMPACT_MAX get rows with a small picture, up to SLIM_MAX get slim
   rows (platform dot, name, time, no picture); past that the day ends with "+N more" (the text
@@ -41,6 +46,7 @@ import aiohttp
 
 from . import groups
 from .calendar import DAY_NAMES, Tile, Week
+from .collabs import with_text
 
 log = logging.getLogger("flavrpromo.render")
 ASSETS = Path(__file__).resolve().parent / "assets"
@@ -50,6 +56,7 @@ COMPACT_MAX = 9         # rows with a small picture that fit in one day's column
 SLIM_MAX = 16           # slim rows that fit (36 px + 5 px gap); past this "+N more"
 PRUNE_DAYS = 21
 MAX_PICTURE = 3 * 1024 * 1024
+COLLAB = "#ffc83d"      # the collab highlight (gold) on every board, whatever the group's colours
 PLATFORM_BADGE = {"youtube": ("Y", "#ff0033", "#fff"), "twitch": ("T", "#9146ff", "#fff"), "kick": ("K", "#53fc18", "#000")}
 TZ_WORDS = {"America/New_York": "Eastern time", "America/Chicago": "Central time", "America/Denver": "Mountain time",
             "America/Los_Angeles": "Pacific time", "Europe/London": "UK time"}
@@ -152,6 +159,7 @@ def tz_words(tz) -> str:
 
 # ── the page ───────────────────────────────────────────────────────────
 CSS = """
+:root{--collab:#ffc83d;--collab-glow:#ffc83d66}
 *{box-sizing:border-box;margin:0} html,body{background:#0e0f14}
 body{width:1600px;height:900px;overflow:hidden;font-family:"DejaVu Sans","Noto Sans","Noto Sans CJK JP",Arial,sans-serif;color:#eef;padding:28px 36px;
  background-image:radial-gradient(circle at 85% -10%,var(--glow1) 0,transparent 40%),radial-gradient(circle at 0% 110%,var(--glow2) 0,transparent 40%)}
@@ -176,7 +184,13 @@ h1{display:flex;align-items:center;gap:18px;font-size:44px;letter-spacing:2px;fo
 .badge.live{background:#e5312f;left:6px;right:auto;top:6px;bottom:auto} .badge.scheduled{background:#fffffff0;color:#111}
 .plats{position:absolute;top:6px;right:6px;display:flex;gap:3px}
 .plat{width:20px;height:20px;border-radius:5px;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center}
-.late{position:absolute;left:6px;bottom:6px;font-size:10px;font-weight:800;padding:2px 6px;border-radius:5px;background:var(--tag);color:#1a1400;letter-spacing:.5px}
+.tags{position:absolute;left:6px;bottom:6px;display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+.late,.cotag{font-size:10px;font-weight:800;padding:2px 6px;border-radius:5px;background:var(--tag);color:#1a1400;letter-spacing:.5px}
+.cotag{background:var(--collab);color:#231a00;box-shadow:0 0 8px #0008}
+.tile.collab{border:2px solid var(--collab);box-shadow:0 0 14px var(--collab-glow)}
+.who .with{color:var(--collab);font-weight:700}
+.row.collab{border-color:var(--collab);box-shadow:inset 4px 0 0 var(--collab),0 0 10px var(--collab-glow)}
+.row i .with,.row b .with{color:var(--collab);font-weight:700}
 .who{display:flex;gap:8px;align-items:flex-start;padding:8px 9px}
 .av{width:30px;height:30px;border-radius:50%;flex:none;border:2px solid #ffffff30;object-fit:cover;background:#2a2d3a;
  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#ccd}
@@ -251,7 +265,9 @@ def _tile(t: Tile, week: Week, img: Img) -> str:
     art = " art" if t.kind == "scheduled" and t.thumb and "box_art" in t.thumb.lower() else ""
     style = f' style="background-image:url(&quot;{html.escape(thumb, quote=True)}&quot;)"' if thumb else ""
     noart = "" if thumb else f'<div class="noart">{html.escape(t.game or t.title or t.name)[:40]}</div>'
-    late = '<span class="late">LATE NOTICE</span>' if week.recap and t.late else ""
+    tags = ('<span class="cotag">COLLAB</span>' if t.collab else "") + \
+           ('<span class="late">LATE NOTICE</span>' if week.recap and t.late else "")
+    tags = f'<span class="tags">{tags}</span>' if tags else ""
     line3 = ""
     if t.kind == "past":
         line3 = f"<u>{clock(t.at, week.tz, True)}–{clock(t.end or t.at, week.tz, True)}" \
@@ -259,10 +275,16 @@ def _tile(t: Tile, week: Week, img: Img) -> str:
     elif t.kind == "live":
         line3 = f"<u>since {clock(t.at, week.tz, True)}</u>"
     sub = t.title or t.game
-    return (f'<div class="tile {t.kind}"><div class="thumb{art}"{style}>{noart}{_badge(t, week)}'
-            f'<span class="plats">{_plats(t)}</span>{late}</div>'
+    co = f'<u class="with">{html.escape(with_text(t.collab))}</u>' if t.collab else ""
+    return (f'<div class="tile {t.kind}{" collab" if t.collab else ""}"><div class="thumb{art}"{style}>{noart}{_badge(t, week)}'
+            f'<span class="plats">{_plats(t)}</span>{tags}</div>'
             f'<div class="who">{_avatar(t, img)}<div><b>{html.escape(t.name)}</b>'
-            f'<i>{html.escape(sub)}</i>{line3}</div></div></div>')
+            f'<i>{html.escape(sub)}</i>{co}{line3}</div></div></div>')
+
+
+def _with(t: Tile) -> str:
+    """A row's "with FlaVR · " in gold in front of its game (collabs only; rows have no room for a line)."""
+    return f'<span class="with">{html.escape(with_text(t.collab, 2))}</span> · ' if t.collab else ""
 
 
 def _row(t: Tile, week: Week, img: Img) -> str:
@@ -274,8 +296,8 @@ def _row(t: Tile, week: Week, img: Img) -> str:
         when = f'<span class="t">{clock(t.at, week.tz, True)} · {hm(t.length)}</span>'
     else:
         when = f'<span class="t">{clock(t.at, week.tz)}</span>'
-    return (f'<div class="row {t.kind}"><span class="mini"{style}>{_plats(t)}</span><div>'
-            f'<b>{html.escape(t.name)}</b>{when}<i>{html.escape(t.game or t.title)}</i></div></div>')
+    return (f'<div class="row {t.kind}{" collab" if t.collab else ""}"><span class="mini"{style}>{_plats(t)}</span><div>'
+            f'<b>{html.escape(t.name)}</b>{when}<i>{_with(t)}{html.escape(t.game or t.title)}</i></div></div>')
 
 
 def _slim(t: Tile, week: Week) -> str:
@@ -288,7 +310,10 @@ def _slim(t: Tile, week: Week) -> str:
         when = f'<span class="t">{clock(t.at, week.tz, True)} · {hm(t.length)}</span>'
     else:
         when = f'<span class="t">{clock(t.at, week.tz)}</span>'
-    return f'<div class="row {t.kind}"><span class="dots">{dots}</span><div><b>{html.escape(t.name)}</b>{when}</div></div>'
+    # a collab: the gold edge, and "+ FlaVR" after the name (no room for more)
+    co = f' <span class="with">+ {html.escape(t.collab[0])}</span>' if t.collab else ""
+    return (f'<div class="row {t.kind}{" collab" if t.collab else ""}"><span class="dots">{dots}</span><div>'
+            f'<b>{html.escape(t.name)}{co}</b>{when}</div></div>')
 
 
 def day_layout(n: int) -> tuple:
@@ -450,18 +475,19 @@ GRID_W, GRID_H = WIDTH - 80, 750      # the tile area under the heading (body pa
 GRID_GAP_X, GRID_GAP_Y = 18, 16
 
 
-def tile_layout(n: int, grid_w: int = GRID_W) -> tuple:
+def tile_layout(n: int, grid_w: int = GRID_W, lines: int = 2) -> tuple:
     """(columns, rows, tile width px, label font px) for ``n`` tiles on a day / focus picture.
     Every tile keeps the 16:9 shape of a stream thumbnail (a wider box would crop the picture's top
     and bottom, Sen 2026-11-19), so the columns are picked to make the tiles as big as fits, and the
     grid is centred (empty space at the sides or bottom rather than cut-off thumbnails). ``grid_w``:
-    the width the tiles may use (less when a day post's host takes the right-hand column)."""
+    the width the tiles may use (less when a day post's host takes the right-hand column). ``lines``:
+    text lines under each tile (2 = name + time; 3 when a collab adds its "with ..." line)."""
     n = max(1, n)
     best = (1, 1, 0, 24)
     for cols in range(1, min(n, 6) + 1):
         rows = -(-n // cols)
         label = 24 if rows <= 2 else 20 if rows <= 3 else 16
-        under = 2 * label + 12                                  # name + time lines under each tile
+        under = lines * label + 12                              # name + time (+ "with ...") lines under each tile
         high = (GRID_H - GRID_GAP_Y * (rows - 1)) / rows - under
         wide = (grid_w - GRID_GAP_X * (cols - 1)) / cols
         w = int(min(wide, high * 16 / 9))
@@ -486,7 +512,8 @@ def tiles_card(group: str, heading: str, tiles: List[Tile], tz, img: Img, logo: 
     shown = tiles if len(tiles) <= DAY_MAX else tiles[:DAY_MAX - 1]
     count = len(shown) + (len(tiles) > len(shown))
     big_host = bool(host and host.get("line")) and count <= HOST_MAX_TILES
-    cols, rows, tw, label = tile_layout(count, GRID_W - (HOST_W if big_host else 0))
+    cols, rows, tw, label = tile_layout(count, GRID_W - (HOST_W if big_host else 0),
+                                        3 if any(t.collab for t in shown) else 2)
     grid_w = cols * tw + (cols - 1) * GRID_GAP_X
     # centred in the space left of the host column (or in the whole width without one)
     grid_left = ((GRID_W - (HOST_W if big_host else 0)) - grid_w) // 2
@@ -497,8 +524,10 @@ def tiles_card(group: str, heading: str, tiles: List[Tile], tz, img: Img, logo: 
         day = f"{datetime.fromtimestamp(t.at, tz):%a} " if show_day else ""
         when = day + clock(t.at, tz) + (f" · {hm(t.length)}" if t.kind == "past" and t.end else
                                         " · LIVE" if t.kind == "live" else "")
-        cells += (f'<div class="c"><i class="k{k % 4}"{style}>{_plats(t)}</i>'
-                  f'<b>{e(t.name)}</b><span>{e(when)}</span></div>')
+        co_tag = '<em class="cot">COLLAB</em>' if t.collab else ""
+        co = f'<span class="co">{e(with_text(t.collab))}</span>' if t.collab else ""
+        cells += (f'<div class="c{" collab" if t.collab else ""}"><i class="k{k % 4}"{style}>{_plats(t)}{co_tag}</i>'
+                  f'<b>{e(t.name)}</b><span>{e(when)}</span>{co}</div>')
     if len(tiles) > len(shown):
         cells += f'<div class="c more">+{len(tiles) - len(shown)} more</div>'
     if not tiles:
@@ -535,6 +564,11 @@ def tiles_card(group: str, heading: str, tiles: List[Tile], tz, img: Img, logo: 
            ".c i{display:block;aspect-ratio:16/9;border-radius:12px;background:#1b1d26 center/cover no-repeat;"
            "border:3px solid var(--c1);position:relative}"
            ".c i.k1{border-color:var(--c2)}.c i.k2{border-color:var(--c3)}.c i.k3{border-color:var(--c4)}"
+           # a confirmed collab: gold frame + glow, a COLLAB tag on the picture, "with ..." under the time
+           f".c.collab i{{border-color:{COLLAB};box-shadow:0 0 22px {COLLAB}aa}}"
+           f".c i .cot{{position:absolute;left:8px;bottom:8px;font-style:normal;font-weight:800;font-size:{max(12, label - 8)}px;"
+           f"letter-spacing:1px;padding:3px 9px;border-radius:6px;background:{COLLAB};color:#231a00;box-shadow:0 0 8px #0008}}"
+           f".c span.co{{color:{COLLAB};font-weight:700;overflow:hidden;text-overflow:ellipsis}}"
            f".c b{{font-size:{label}px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}"
            f".c span{{font-size:{label - 4}px;color:#ccd;white-space:nowrap}}"
            f".c.more{{align-items:center;justify-content:center;font-size:28px;color:#aab;height:{round(tw * 9 / 16)}px}}"

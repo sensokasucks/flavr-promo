@@ -30,7 +30,9 @@ Rules (from the plan doc, decided with the owner):
     badges (multistream);
   * LATE NOTICE (recap only): a stream with no scheduled item seen at least LATE_NOTICE before it
     started (never for streams filled in from VODs: nobody was looking for schedules then);
-  * people marked hidden (/friend hide) are left out.
+  * people marked hidden (/friend hide) are left out;
+  * a confirmed collab (flavrpromo/collabs.py, owner 2026-11-22) carries its partners' names in
+    ``Tile.collab``, and everything that draws the calendar highlights it.
 
 Times are unix seconds everywhere; ``tz`` is a ZoneInfo (Settings.timezone).
 """
@@ -72,6 +74,9 @@ class Tile:
     late: bool = False
     person_id: int = 0
     from_vod: bool = False          # filled in afterwards from the platform (Watcher.backfill)
+    # a confirmed collab: the partners' names (groups, people, outside @handles), set by
+    # flavrpromo/collabs.py ``mark``; render.py / calendar_post.py / share.py / web.py highlight it
+    collab: List[str] = field(default_factory=list)
 
     @property
     def key(self) -> str:
@@ -136,7 +141,8 @@ class Week:
     def signature(self) -> str:
         """What the picture shows, minus things that tick (viewers, live picture refresh):
         unchanged signature = no need to redraw."""
-        rows = [(t.kind, t.name, int(t.at), int(t.end or 0), t.title, t.game, t.url, tuple(t.platforms), t.late)
+        rows = [(t.kind, t.name, int(t.at), int(t.end or 0), t.title, t.game, t.url, tuple(t.platforms), t.late,
+                 tuple(t.collab))
                 for t in self.tiles()]
         return json.dumps([self.group, self.start.isoformat(), self.recap, self.label, self.today_index(), rows,
                            [u.get("video_id") for u in self.uploads]])
@@ -255,7 +261,8 @@ def build_week(store: Store, group: str, start: datetime, now: float, tz: ZoneIn
                                platforms=[plat] if plat else [], links={plat: x.get("url") or ""} if plat else {}))
         tiles += merged
 
-    from . import promo                 # late import: promo.py imports Tile and the windows from here
+    from . import collabs, promo        # late imports: both import from here
+    collabs.mark(store, tiles)          # confirmed collabs get their partners' names (the highlight)
     if group == promo.GROUP:
         tiles += promo.tiles(store, a, b, now, recap)
 

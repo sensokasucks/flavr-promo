@@ -65,9 +65,15 @@ up to an hour to show the first time):
                         /live, /schedule, /calendar view|share used there show only them
     /me schedule day time [title] | unschedule | main platform | x handle | hide [hidden] |
         posts [group_channel] [own_channel] | share [week] | signoff add|remove|list   the linked person's own entry
+  Collabs (flavrpromo/collabs.py; owner or Manage Server)
+    /collab list        possible (waiting) and confirmed collabs of this week and next, numbered
+    /collab confirm number | dismiss number    the same as the DM's Confirm / Not a collab buttons
+    /collab add name with [day]   mark someone's stream (today's / the next one, or on that day) as a
+                        collab with "FlaVR, Lulu, @someone" by hand
+    /collab detect on   spot @mentions in titles at all (default on)
   Owner only (answers only you can see)
     /status             the go-live watcher and this PC
-    /pings view | set kind on | quiet start end          DM switches (friends, calendar, share) and quiet hours
+    /pings view | set kind on | quiet start end          DM switches (friends, calendar, share, collab) and quiet hours
 
 Every message sets allowed_mentions to nothing, so a stream title can't ping @everyone.
 Commands answer "only you can see this" (ephemeral) unless they are meant for the channel.
@@ -91,7 +97,7 @@ from discord import app_commands
 from . import focus, sysinfo
 from .calendar import DAY_NAMES, REVIEW_NAMES
 from .config import Settings
-from . import gameinfo, games, host_cards, host_picker, host_webhooks, hosts, promo, signoff, talent
+from . import collabs, gameinfo, games, host_cards, host_picker, host_webhooks, hosts, promo, signoff, talent
 from .pings import KINDS, Pinger, length
 from .share import X_STYLES
 from . import groups
@@ -135,6 +141,49 @@ def make_embed(data: Dict[str, Any], picture: str = "") -> discord.Embed:
     if picture:
         e.set_image(url=f"attachment://{picture}")
     return e
+
+
+class CollabButton(discord.ui.DynamicItem[discord.ui.Button], template=r"collab:(?P<yes>[01]):(?P<cid>[0-9]+)"):
+    """The Confirm / Not a collab buttons on the owner's possible-collab DM (PromoBot.dm_collab). A
+    DynamicItem: the row id and the answer are in the button's custom_id, so the buttons still work
+    after the bot restarts (registered in setup_hook). Only the owner (OWNER_ID) can press them; the
+    answer goes to flavrpromo/collabs.py ``decide`` and the calendar redraws (CalendarPoster.poke)."""
+
+    def __init__(self, cid: int, yes: bool):
+        super().__init__(discord.ui.Button(
+            label="Confirm collab" if yes else "Not a collab", emoji="🤝" if yes else None,
+            style=discord.ButtonStyle.success if yes else discord.ButtonStyle.secondary,
+            custom_id=f"collab:{int(yes)}:{cid}"))
+        self.cid, self.yes = cid, yes
+
+    @classmethod
+    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Button, match: "re.Match[str]"):
+        return cls(int(match["cid"]), match["yes"] == "1")
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = interaction.client
+        if not bot.is_owner_id(interaction.user):
+            await interaction.response.send_message("Only the streamer can answer this.", ephemeral=True)
+            return
+        row = collabs.decide(bot.store, self.cid, self.yes)
+        old = (interaction.message.content if interaction.message else "") or ""
+        if row is None:
+            note = "\n*(That stream is gone from the calendar.)*"
+        elif self.yes:
+            note = "\n✅ **Confirmed:** it gets the collab highlight on the calendars."
+        else:
+            note = "\n➖ **Not a collab:** it won't be suggested again."
+        await interaction.response.edit_message(content=(old + note)[:2000], view=None)
+        if bot.calendar is not None:
+            bot.calendar.poke()             # redraw the boards with (or without) the highlight
+
+
+def collab_view(cid: int) -> discord.ui.View:
+    """The two buttons for one possible collab (PromoBot.dm_collab, /collab list's newest)."""
+    view = discord.ui.View(timeout=None)
+    view.add_item(CollabButton(cid, True))
+    view.add_item(CollabButton(cid, False))
+    return view
 
 
 def ago(ts: Optional[float]) -> str:
@@ -196,6 +245,11 @@ class PromoBot(discord.Client):
         user = self.get_user(self.settings.owner_id) or await self.fetch_user(self.settings.owner_id)
         files = [discord.File(io.BytesIO(png), filename="calendar.png")] if png else []
         await user.send(text, files=files, allowed_mentions=NO_PINGS)
+
+    async def dm_collab(self, text: str, cid: int) -> None:
+        """flavrpromo/calendar_post.py ``collab_tick``: one possible collab, with Confirm / Not a collab."""
+        user = self.get_user(self.settings.owner_id) or await self.fetch_user(self.settings.owner_id)
+        await user.send(text[:2000], view=collab_view(cid), allowed_mentions=NO_PINGS, suppress_embeds=True)
 
     async def dm_share(self, messages: List[str], png: Optional[bytes] = None, user_id: int = 0) -> None:
         """flavrpromo/calendar_post.py's share package: the picture with the first message, then one DM
@@ -264,6 +318,7 @@ class PromoBot(discord.Client):
         return self.is_owner_id(inter.user) or bool(perms and perms.manage_guild)
 
     async def setup_hook(self) -> None:
+        self.add_dynamic_items(CollabButton)        # possible-collab DM buttons, also on DMs sent before a restart
         if self.settings.guild_id:
             guild = discord.Object(id=self.settings.guild_id)
             self.tree.copy_global_to(guild=guild)
@@ -1222,6 +1277,95 @@ class PromoBot(discord.Client):
                                       "Settings → allow direct messages.", ephemeral=True)
 
         tree.add_command(calendar)
+
+        # /collab: possible and confirmed collab streams (flavrpromo/collabs.py, owner 2026-11-22)
+        collab_cmd = app_commands.Group(name="collab", description="Collab streams: confirm the possible ones, "
+                                                                   "mark one by hand (owner or Manage Server)")
+        day_choices = [app_commands.Choice(name=d.title(), value=i) for i, d in enumerate(DAY_NAMES)]
+
+        def collab_line(r: Dict[str, Any]) -> str:
+            mark = {"suggested": "❔", "confirmed": "🤝", "dismissed": "➖"}.get(r["state"], "")
+            title = (r.get("title") or "").replace("`", "'")[:70]
+            return (f"`{r['id']}` {mark} <t:{int(r['at'])}:f> **{r['name']}** {collabs.with_text(collabs.names(r['partners']))}"
+                    + (f" · {title}" if title else ""))
+
+        @collab_cmd.command(name="list", description="Possible and confirmed collabs of this week and next")
+        async def collab_list(inter: discord.Interaction):
+            if not await managers_only(inter):
+                return
+            now = bot.calendar.clock() if bot.calendar else time.time()
+            rows = [r for r in bot.store.collabs_between(now - collabs.SCAN_BACK, now + collabs.SCAN_AHEAD)
+                    if r["state"] != "dismissed"]
+            if not rows:
+                await inter.response.send_message("No collabs found or marked for this week and next. "
+                                                  "Titles are read for @mentions every minute.", ephemeral=True)
+                return
+            lines = [collab_line(r) for r in rows]
+            lines.append("❔ = waiting for you: `/collab confirm number` or `/collab dismiss number`.")
+            await inter.response.send_message("\n".join(lines)[:2000], ephemeral=True, allowed_mentions=NO_PINGS)
+
+        async def collab_decide(inter: discord.Interaction, number: int, yes: bool) -> None:
+            if not await managers_only(inter):
+                return
+            row = collabs.decide(bot.store, number, yes)
+            if row is None:
+                await inter.response.send_message(f"No collab number {number} (see `/collab list`).", ephemeral=True)
+                return
+            if bot.calendar is not None:
+                bot.calendar.poke()
+            await inter.response.send_message(("Confirmed: " if yes else "Not a collab: ") + collab_line(row),
+                                              ephemeral=True, allowed_mentions=NO_PINGS)
+
+        @collab_cmd.command(name="confirm", description="Confirm a possible collab: it gets the highlight")
+        @app_commands.describe(number="The number in /collab list")
+        async def collab_confirm(inter: discord.Interaction, number: int):
+            await collab_decide(inter, number, True)
+
+        @collab_cmd.command(name="dismiss", description="Not a collab (or no longer one): no highlight")
+        @app_commands.describe(number="The number in /collab list")
+        async def collab_dismiss(inter: discord.Interaction, number: int):
+            await collab_decide(inter, number, False)
+
+        @collab_cmd.command(name="add", description="Mark someone's stream as a collab by hand")
+        @app_commands.autocomplete(name=person_auto)
+        @app_commands.choices(day=day_choices)
+        @app_commands.describe(partners="Who with: groups, people or @handles, commas between (\"FlaVR, Lulu\")",
+                               day="Their stream on this day (default: the one on now, else their next)")
+        async def collab_add(inter: discord.Interaction, name: str, partners: str,
+                             day: Optional[app_commands.Choice[int]] = None):
+            if not await managers_only(inter):
+                return
+            person = bot.store.person(name)
+            if not person:
+                await inter.response.send_message(f"No one called {name}.", ephemeral=True)
+                return
+            now = bot.calendar.clock() if bot.calendar else time.time()
+            tz = bot.calendar.tz if bot.calendar else None
+            stream = collabs.pick_stream(bot.store, person["id"], now, tz, day.value if day else None)
+            if not stream:
+                await inter.response.send_message(f"{person['name']} has no stream {'on ' + day.name if day else 'on now or coming up'} "
+                                                  "on the calendar to mark.", ephemeral=True)
+                return
+            parts = collabs.partners_from_text(bot.store, partners, person["id"])
+            if not parts:
+                await inter.response.send_message("Type who with, e.g. `FlaVR, Lulu`.", ephemeral=True)
+                return
+            cid = collabs.add(bot.store, person["id"], stream["at"], parts, stream["title"], now=now)
+            if bot.calendar is not None:
+                bot.calendar.poke()
+            await inter.response.send_message("Marked: " + collab_line(bot.store.collab_get(cid) or {}),
+                                              ephemeral=True, allowed_mentions=NO_PINGS)
+
+        @collab_cmd.command(name="detect", description="Spot @mentions in stream titles as possible collabs")
+        async def collab_detect(inter: discord.Interaction, on: bool):
+            if not await managers_only(inter):
+                return
+            bot.store.put("collab_detect", bool(on))
+            await inter.response.send_message("Titles are read for @mentions again." if on else
+                                              "No more spotting. Confirmed collabs keep their highlight; "
+                                              "`/collab add` still marks one by hand.", ephemeral=True)
+
+        tree.add_command(collab_cmd)
 
         # /host: Colette and Clark (flavrpromo/hosts.py, host_cards.py, host_picker.py). Pictures live in
         # DATA_DIR/hosts; kv hosts_on / hosts_only are the switches.

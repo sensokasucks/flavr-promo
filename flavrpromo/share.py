@@ -33,6 +33,7 @@ from typing import Any, Dict, List
 
 from . import groups
 from .calendar import DAY_NAMES, UPLOAD_ICONS, UPLOAD_NAMES, UPLOADS_HEAD, Tile, Week
+from .collabs import with_text
 
 DISCORD_MAX = 2000          # one Discord message
 X_MAX = 280                 # one X post (weighted: see x_len)
@@ -98,7 +99,9 @@ def discord_parts(week: Week) -> List[str]:
             what = _clean(t.title or t.game)
             mark = {"past": "✅", "live": "🔴", "scheduled": "•"}[t.kind]
             link = f" [{'VOD' if t.kind == 'past' else 'watch'}](<{t.url}>)" if t.url else ""
-            day.append(f"{mark} {when} **{no_tags(t.name)}**" + (f" · {what}" if what else "") + link)
+            # a confirmed collab (flavrpromo/collabs.py): "🤝 with FlaVR" after the name
+            co = f" 🤝 *{no_tags(with_text(t.collab))}*" if t.collab else ""
+            day.append(f"{mark} {when} **{no_tags(t.name)}**{co}" + (f" · {what}" if what else "") + link)
         # a day longer than one message (rare) is cut between streams, its heading repeated
         chunk: List[str] = []
         for row in day[1:]:
@@ -183,6 +186,8 @@ def _x_day(i: int, week: Week, bold: bool = False) -> str:
 def _x_row(t: Tile, week: Week, handles: Dict[int, str]) -> str:
     """One stream: "▸ 7 PM · @luluteala" (recap: "▸ 7 PM · @luluteala · 3 h")."""
     row = f"▸ {_ampm(t.at, week.tz)} · {_who(t, handles)}"
+    if t.collab:                        # a confirmed collab (flavrpromo/collabs.py); @ defused like names
+        row += f" 🤝 {no_tags(with_text(t.collab, 2))}"
     if t.kind == "past" and t.end:
         hours = t.length / 3600
         row += f" · {hours:.1f} h".replace(".0 h", " h") if hours >= 1 else f" · {int(t.length // 60)} min"

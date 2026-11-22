@@ -26,7 +26,7 @@ def make(hour=14, live=False):
 
 
 def test_only_the_calendar_kinds():
-    assert sorted(KINDS) == ["calendar", "friends", "share"]
+    assert sorted(KINDS) == ["calendar", "collab", "friends", "share"]
 
 
 async def test_switches_and_quiet_hours_hold():
