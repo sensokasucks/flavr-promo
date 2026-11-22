@@ -378,7 +378,7 @@ async def ensure_day_talls(poster: Any, p: Dict[str, Any]) -> None:
             continue
         if week is None:
             week, _ = await _article(poster, p)
-        built, _err = recipes.build("day", p, week, n, str(p.get("day_seams") or ""))
+        built, _err = recipes.build("day", p, week, n, str(p.get("day_seams") or ""), str(p.get("day_stream_look") or ""))
         ids = []
         for _title, chunks in built:
             tid = recipes.next_tall_id(p)
@@ -401,7 +401,7 @@ def _tall_block(dkey: str, p: Dict[str, Any], tid: str) -> str:
 
 
 _STAMP_SKIP = ("saved_at", "texts", "talls", "sections", "picks", "candidates", "ai", "ai_state", "ai_raw",
-               "day_style", "day_styles", "day_talls", "day_seams")
+               "day_style", "day_styles", "day_talls", "day_seams", "day_stream_look")
 
 
 def stamp(p: Dict[str, Any], part: str = "") -> int:
@@ -620,6 +620,8 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
                    for v, n in (("classic", "Classic pictures"), ("tall", "Tall pictures (each day in detail)")))
     dseam = "".join(f'<option value="{v}"{" selected" if v == p.get("day_seams", "") else ""}>{_e(n)}</option>'
                     for v, n in recipes.SEAMS.items())      # used when a day's tall picture is built (Regen rebuilds it)
+    dlook = "".join(f'<option value="{v}"{" selected" if v == p.get("day_stream_look", "") else ""}>{_e(n)}</option>'
+                    for v, n in tall.LOOKS.items())         # used when a day's tall picture is built too
     cov = p.get("cover_look", "host")
     copts = "".join(f'<option value="{v}"{" selected" if v == cov else ""}>{_e(n)}</option>'
                     for v, n in (("host", "In the host's look"), ("board", "Board look")))
@@ -648,7 +650,7 @@ def page(poster: Any, dkey: str, p: Dict[str, Any], saved: str = "", week: Any =
             f'<p class=inline data-nolive>Host <select name=host>{hopts}</select> <button name=action value=host class=alt>'
             f'Change host</button> <small>Changing the host gives new lines for both host sections and the day pictures.</small></p>'
             f'<div data-swap=rebuild data-swap-id=look><p class=inline>Day pictures <select name=day_look>{lopts}</select> '
-            f'<select name=day_layout>{alls}</select> <label>Day style <select name=day_style>{dsty}</select></label> <label>tall seams <select name=day_seams>{dseam}</select></label></p>{colours}{cover}{ai_note}{_variation_picker(p)}</div></div></details>'
+            f'<select name=day_layout>{alls}</select> <label>Day style <select name=day_style>{dsty}</select></label> <label>tall seams <select name=day_seams>{dseam}</select></label> <label>tall streams <select name=day_stream_look>{dlook}</select></label></p>{colours}{cover}{ai_note}{_variation_picker(p)}</div></div></details>'
             f'<details class=card id=add open><summary><b>➕ Add to the article</b> <span class=what>tall sections, your own '
             f'text, a fresh calendar</span></summary><div class=inner data-nolive>{_recipe_row(week, poster.store)}'
             f'<p class=help>Calendar sections are as of {built}. <button name=action value=regen_all class=alt>↻ Regen every '
@@ -698,6 +700,7 @@ def _recipe_row(week: Any, store: Any = None) -> str:
             f'<label>day <select name=recipe_day>{o(days)}</select></label> '
             f'<label>person <select name=recipe_person>{o((n, n) for n in recipes.people(week))}</select></label> '
             f'<select name=recipe_seams>{o(recipes.SEAMS.items())}</select> '
+            f'<label>streams <select name=recipe_look>{o(tall.LOOKS.items())}</select></label> '
             f'<button name=action value=add_recipe class=alt>Build it</button> '
             f'<small>(day / person only matter for that recipe; edit the chunks afterwards)</small></p>'
             # a tall picture from a stack: a built-in one or one you saved in the builder (this week's streams / games go in)
@@ -788,6 +791,8 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
         p["day_layout"] = str(form.get("day_layout"))
     if "day_seams" in form and str(form.get("day_seams") or "") in recipes.SEAMS:
         p["day_seams"] = str(form.get("day_seams") or "")
+    if "day_stream_look" in form and str(form.get("day_stream_look") or "") in tall.LOOKS:
+        p["day_stream_look"] = str(form.get("day_stream_look") or "")
     if str(form.get("day_style") or "") in DAY_STYLES:
         p["day_style"] = str(form.get("day_style"))
     for i in range(7):
@@ -898,7 +903,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
             week, _ = await _article(poster, p)
             which_recipe = str(form.get("recipe") or "")
             arg = str(form.get("recipe_day") if which_recipe == "day" else form.get("recipe_person") or "")
-            built, err = recipes.build(which_recipe, p, week, arg, str(form.get("recipe_seams") or ""))
+            built, err = recipes.build(which_recipe, p, week, arg, str(form.get("recipe_seams") or ""), str(form.get("recipe_look") or ""))
             if err:
                 note = err
             else:

@@ -35,7 +35,9 @@ edits it:
   * a Look card for the whole stack (owner 2026-11-22: "a way to change the stack style and color scheme"):
     its colour scheme (the picture's own entry in the draft's p["schemes"], flavrpromo/schemes.py), its host
     style (p["talls"][tid]["host"]: whose lettering, colours and pictures; recipes.as_tall) and one kind of
-    bottom edge for every chunk at once (recipes.apply_seams),
+    bottom edge for every chunk at once (recipes.apply_seams); it also sets the "look" of every stream chunk
+    (the plain row or the day pictures' colour strip, tall.LOOKS / recipes.apply_look) and each stream chunk
+    has its own Look menu (owner 2026-11-22: "add the article styles ... to the chunk stacks as well"),
   * a stream chunk links to the stream itself (VOD, live page or planned page) so it can be checked,
   * "↻ Redraw" under the preview draws the picture again without changing anything,
   * the page saves itself and redraws the preview as menus change (flavrpromo/panel.py SCRIPT, "data-live");
@@ -251,6 +253,8 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str], s
             rows = recipes.game_rows(p.get("facts") or {}, week)
             names = [("", "(pick a game)")] + [(r["game"], r["game"]) for r in rows]
             pick = f'<label>Game <select name="{cid}__game">{_opts(names, c.get("game") or "")}</select></label>'
+        looks = (f'<label>Look <select name="{cid}__look">{_opts(tall.LOOKS.items(), c.get("look") or "")}</select></label>'
+                 if t == "stream" else "")
         ticks = "".join(f'<label class=tick><input type=checkbox name="{cid}__show_{k}" value=1'
                         f'{" checked" if tall.shown(c, k) else ""}> {_e(n)}</label>' for k, n in tall.SHOW[t].items())
         more = _picture_menus(c, p) if tall.shown(c, "host") else ""
@@ -258,7 +262,7 @@ def _fields(c: Dict[str, Any], p: Dict[str, Any], week: Any, lines: List[str], s
         about = recipes.ABOUT if t == "stream" else recipes.ABOUT_GAME
         steer = (f'<p class=steer><label>The remark is about <select name="{cid}__about">'
                  f'{_opts(about.items(), c.get("about") or "")}</select></label> {_hint_field(c)}</p>')
-        return (pick + f'<p class=ticks><input type=hidden name="{cid}__showed" value=1>{ticks}</p>' + more
+        return (pick + looks + f'<p class=ticks><input type=hidden name="{cid}__showed" value=1>{ticks}</p>' + more
                 + _line_field(c, "line", lines, "Remark") + _choices(c) + steer
                 + f'<p><button name=action value="ai:{cid}" class=alt>✨ Write the remark</button> '
                 f'<small>(KoboldCpp writes a few from this {t}\'s facts to pick from; the page waits for it)</small></p>')
@@ -412,17 +416,21 @@ def _look_card(p: Dict[str, Any], tid: str) -> str:
                    menu for this picture sets; article_editor.scheme_part)
       Host style   whose lettering, colours and pictures the stack is drawn in (name "stack_host"; "" = the
                    article's host); chunks set to "the article's host" follow it
-      Bottom edges one kind of seam for every chunk at once (name "stack_seams" + the "seams" button)"""
+      Bottom edges one kind of seam for every chunk at once (name "stack_seams" + the "seams" button)
+      Streams      the plain row or the day pictures' colour strip for every stream chunk (name "stack_look" +
+                   the "looks" button; each stream chunk also has its own Look menu)"""
     q = recipes.as_tall(p, tid)
     part = article_editor.scheme_part(p, tid)
     hopts = [("", f"The article's host ({hosts.HOSTS[p['host']]['name']})")] + [(k, h["name"]) for k, h in hosts.HOSTS.items()]
     seams = [(k, v.replace(" seams", "")) for k, v in recipes.SEAMS.items()]
     return (f'<details class="card lookcard" id=look open><summary><b>🎨 Look of the whole stack</b> '
-            f'<span class=what>colours, host style, bottom edges</span></summary><div class=inner>'
+            f'<span class=what>colours, host style, bottom edges, stream look</span></summary><div class=inner>'
             f'{article_editor._scheme_menu(q, part)} '
             f'<label>Host style <select name=stack_host>{_opts(hopts, p["talls"][tid].get("host") or "")}</select></label> '
             f'<span data-nolive><label>Bottom edges <select name=stack_seams>{_opts(seams, "")}</select></label>'
-            f'<button name=action value=seams class=alt>Set every edge</button></span>'
+            f'<button name=action value=seams class=alt>Set every edge</button></span> '
+            f'<span data-nolive><label>Streams <select name=stack_look>{_opts(tall.LOOKS.items(), "")}</select></label>'
+            f'<button name=action value=looks class=alt>Set every stream</button></span>'
             f'<small>Each chunk still has its own colour and bottom edge below. For another layout, use '
             f'“Start from this stack” at the bottom of the page.</small></div></details>')
 
@@ -496,6 +504,8 @@ def _apply(c: Dict[str, Any], form: Any, p: Dict[str, Any], week: Any) -> None:
         c["game"] = get("game") if get("game") in {r["game"] for r in recipes.game_rows(p.get("facts") or {}, week)} else ""
     if t in recipes.LINE_TYPES + recipes.SUMMARY_TYPES and get("hint") is not None:     # the owner's few words for ✨
         c["hint"] = " ".join(str(get("hint")).split())[:recipes.HINT_MAX]
+    if t == "stream" and get("look") is not None:       # the plain row or the colour strip (tall.LOOKS)
+        c["look"] = get("look") if get("look") in tall.LOOKS else ""
     if t in recipes.LINE_TYPES:
         if get("about") is not None:            # what ✨ writes about (recipes.ask_kind)
             c["about"] = "game" if get("about") == "game" else ""
@@ -729,6 +739,9 @@ def add_routes(app: web.Application, poster: Any) -> None:
         elif verb == "seams":                   # the Look card: one kind of bottom edge for every chunk
             recipes.apply_seams(chunks, str(form.get("stack_seams") or ""))
             note = "Set every bottom edge."
+        elif verb == "looks":                   # the Look card: the plain row or colour strips for every stream chunk
+            recipes.apply_look(chunks, str(form.get("stack_look") or ""))
+            note = "Set every stream's look." if any(x["type"] == "stream" for x in chunks) else "This stack has no stream chunks."
         elif verb == "ai" and i >= 0 and chunks[i]["type"] not in recipes.LINE_TYPES + recipes.SUMMARY_TYPES:
             note = "That kind of chunk has no ✨."
         elif verb == "ai" and i >= 0:           # ✨ one chunk's remark / line: a few to pick from (the page waits)
@@ -848,7 +861,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         elif verb == "add_recipe":              # a whole picture (or several) from the week: flavrpromo/recipes.py
             recipe = str(form.get("recipe") or "")
             arg = str(form.get("recipe_day") if recipe == "day" else form.get("recipe_person") or "")
-            built, err = recipes.build(recipe, p, week, arg, str(form.get("recipe_seams") or ""))
+            built, err = recipes.build(recipe, p, week, arg, str(form.get("recipe_seams") or ""), str(form.get("recipe_look") or ""))
             if err:
                 raise web.HTTPSeeOther(here + quote(err))
             ids = recipes.add_to_draft(p, built, on=False)

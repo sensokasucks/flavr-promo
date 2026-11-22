@@ -152,6 +152,26 @@ async def test_the_tall_pictures_page_opens_a_stack_editor_directly(tmp_path):
             assert p["schemes"] == {} and p["talls"]["tall1"]["host"] == ""
             ch, loc = await build("seams", stack_seams="wave")
             assert [x.get("cut") for x in ch[:-1]] == ["wave"] * (len(ch) - 1) and "every%20bottom%20edge" in loc
+            # the stream look: the Look card sets every stream chunk, each stream has its own menu, a recipe can start with it
+            page = await builder()
+            assert "name=stack_look" in page and 'value=looks' in page
+            ch, loc = await build("looks", stack_look="strip")
+            streams = [x for x in ch if x["type"] == "stream"]
+            assert streams and all(x["look"] == "strip" for x in streams) and "stream" in loc
+            sid1 = streams[0]["id"]
+            assert f'name="{sid1}__look"' in await builder()
+            ch, _ = await build("save", **{f"{sid1}__look": "nonsense"})              # only a known look is taken
+            assert next(x for x in ch if x["id"] == sid1)["look"] == ""
+            ch, _ = await build("save", **{f"{sid1}__look": "strip"})
+            assert next(x for x in ch if x["id"] == sid1)["look"] == "strip"
+            ch, _ = await build("looks", stack_look="")
+            assert all(x.get("look") == "" for x in ch if x["type"] == "stream")
+            loc = await make(action="add_recipe", recipe="day", recipe_day=str(day), recipe_look="strip")
+            made = store.get(dkey)["talls"][loc.split("t=")[1].split("&")[0].split("#")[0]]["chunks"]
+            assert [x["look"] for x in made if x["type"] == "stream"] == ["strip"] * len([x for x in made if x["type"] == "stream"]) and made
+            # the article editor's recipe row and Look card offer it too
+            page = await (await c.get("/settings/article?group=flavr&which=week")).text()
+            assert "name=recipe_look" in page and "name=day_stream_look" in page
             # the article editor still lists the picture, unticked
             page = await (await c.get("/settings/article?group=flavr&which=week")).text()
             assert 'id="s-tall1"' in page
