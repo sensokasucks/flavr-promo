@@ -38,6 +38,7 @@ can pick its own. Drafts: p["day_look"] "host" / "board", p["day_layout"] the ar
 p["day_layouts"] {day: layout, "" = the article's}.
 p["day_kinds"] / p["day_vars"] {day: host picture kind / pool variant id, "" = the default chibi_happy / the draft's pick}:
 which host picture stands on that day's classic picture (owner 2026-11-22: "no way to pick from the host images").
+p["day_figs"] {day: {pscale, prot, px, py, pflip}}: its size % / turn / move / mirror, as the tall builder's chunks have (tall.PIC_NUMBERS).
 
 Every line (round 2, owner 2026-11-21: "a better way to regen the open/close cards ... kobold regen
 lines in each section so i dont have to scroll to the top and get forced to change all the lines")
@@ -403,7 +404,7 @@ def _tall_block(dkey: str, p: Dict[str, Any], tid: str) -> str:
 
 
 _STAMP_SKIP = ("saved_at", "texts", "talls", "sections", "picks", "candidates", "ai", "ai_state", "ai_raw",
-               "day_style", "day_styles", "day_talls", "day_seams", "day_stream_look", "day_kinds", "day_vars")
+               "day_style", "day_styles", "day_talls", "day_seams", "day_stream_look", "day_kinds", "day_vars", "day_figs")
 
 
 def stamp(p: Dict[str, Any], part: str = "") -> int:
@@ -424,7 +425,8 @@ def stamp(p: Dict[str, Any], part: str = "") -> int:
     elif part:
         mine = host_picker.chosen(p, part)
         if part.startswith("day") and part[3:].isdigit():       # its own host picture
-            mine = [mine, (p.get("day_kinds") or {}).get(part[3:], ""), (p.get("day_vars") or {}).get(part[3:], "")]
+            mine = [mine, (p.get("day_kinds") or {}).get(part[3:], ""), (p.get("day_vars") or {}).get(part[3:], ""),
+                    (p.get("day_figs") or {}).get(part[3:], {})]
     return zlib.crc32(json.dumps([base, mine], sort_keys=True, default=str).encode())
 
 
@@ -735,8 +737,15 @@ def _day_picture_menus(p: Dict[str, Any], i: str) -> str:
     pin = (p.get("pins") or {}).get(shown, "")
     thumb = (f'<img src="/settings/picture/{key}/{shown}?v={var or pin or "main"}" alt="" style="height:64px;vertical-align:middle">'
              if hosts.exact(key, shown, var or pin or "main") else "")
+    fig = (p.get("day_figs") or {}).get(i) or {}
+    num = lambda f, label, unit: (  # noqa: E731
+        f'<label>{label} <input type=number name="dayfig_{f}_{i}" value="{tall._num(fig, f)}" min={tall.PIC_NUMBERS[f][0]} '
+        f'max={tall.PIC_NUMBERS[f][1]} step={5 if f != "pscale" else 10} style="width:5.5em"> {unit}</label> ')
     return (f'<label>Host picture <select name="daykind_{i}">{o(kinds, kind)}</select></label> '
-            f'<label>Which one <select name="dayvar_{i}">{o(vars_, var)}</select></label> {thumb}')
+            f'<label>Which one <select name="dayvar_{i}">{o(vars_, var)}</select></label> {thumb}<br>'
+            + num("pscale", "Size", "%") + num("prot", "Turn", "°") + num("px", "Move right", "px") + num("py", "Move down", "px")
+            + f'<input type=hidden name="dayfig_on_{i}" value=1><label class=tick><input type=checkbox name="dayfig_pflip_{i}" value=1'
+              f'{" checked" if fig.get("pflip") else ""}> Mirror</label>')
 
 
 def _variation_picker(p: Dict[str, Any]) -> str:
@@ -837,6 +846,10 @@ def _save_form(p: Dict[str, Any], form: Any) -> None:
             p.setdefault("day_kinds", {})[str(i)] = k
             v = str(form.get(f"dayvar_{i}") or "")
             p.setdefault("day_vars", {})[str(i)] = v if v in [x for x, _ in hosts.variants(p["host"], k or "chibi_happy")] else ""
+        if f"dayfig_on_{i}" in form:            # size / turn / move / mirror of that picture (same limits as the chunks')
+            p.setdefault("day_figs", {})[str(i)] = {
+                **{f: tall._num({f: form.get(f"dayfig_{f}_{i}")}, f) for f in tall.PIC_NUMBERS},
+                "pflip": bool(form.get(f"dayfig_pflip_{i}"))}
     if "scheme" in form:                            # the article's colour scheme (flavrpromo/schemes.py)
         v = str(form.get("scheme") or "")
         if v in ("", schemes.RANDOM, schemes.MIX) or (schemes.get(v) and v != p["host"]):
@@ -1050,6 +1063,7 @@ def add_routes(app: web.Application, poster: Any) -> None:
         with hosts.look(p.get("seed"), pins):
             png = await poster.shooter.png(schemes.recolour(host_cards.day(
                 p["host"], week, i, poster.images.data_url, host_picker.chosen(p, f"day{i}"), chibi_kind=kind,
+                fx=tall.picture_fx((p.get("day_figs") or {}).get(str(i)) or {}),
                 layout=(p.get("day_layouts") or {}).get(str(i)) or p.get("day_layout", "wall")), scheme_for(p, f"day{i}")))
         return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "no-store"})
 

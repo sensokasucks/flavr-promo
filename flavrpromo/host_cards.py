@@ -196,14 +196,15 @@ DAY_LAYOUTS = {"wall": "Pinned wall (every stream the same size)",
 
 
 def day(key: str, week: Any, i: int, img: Callable[[str], str], line: str = "", chibi_kind: str = "",
-        layout: str = "wall") -> str:
+        layout: str = "wall", fx: str = "") -> str:
     """Day ``i`` of ``week`` (flavrpromo/calendar.py Week) in host ``key``'s look. ``img``: a picture
     address for a thumbnail / avatar URL (render.ImageCache.data_url). ``line``: what the host says
     about the day ("" = no bubble). ``chibi_kind``: which picture stands in the corner (default
-    their happy chibi). ``layout``: one of DAY_LAYOUTS (unknown = wall).
+    their happy chibi). ``layout``: one of DAY_LAYOUTS (unknown = wall). ``fx``: CSS
+    (transform and origin) for the host picture's size / turn / mirror / move (tall.picture_fx; "" = as designed).
     Called by flavrpromo/article_editor.py (/settings/article/day)."""
     if layout in DAY_LAYOUTS and layout != "wall":
-        return _day_alt(key, week, i, img, line, chibi_kind, layout)
+        return _day_alt(key, week, i, img, line, chibi_kind, layout, fx)
     date = week.start + timedelta(days=i)
     tiles = list(week.days[i])
     shown = tiles if len(tiles) <= DAY_MAX else tiles[:DAY_MAX - 1]
@@ -242,7 +243,7 @@ def day(key: str, week: Any, i: int, img: Callable[[str], str], line: str = "", 
                ".plat{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:5px;font:800 13px sans-serif;"
                "display:inline-flex;align-items:center;justify-content:center}.ph i .plat+.plat{right:34px}")
         side = (f'<img src="{pic}" style="position:absolute;right:30px;bottom:40px;width:{DAY_HOST_W - 20}px;height:380px;'
-                f'object-fit:contain;object-position:bottom">' if pic else "")
+                f'object-fit:contain;object-position:bottom;{fx}">' if pic else "")
         say = (f'<div class=serif style="position:absolute;right:30px;bottom:{440 if pic else 60}px;width:{DAY_HOST_W - 20}px;'
                f'background:#f4ead8;color:#2b1d12;padding:18px 20px;font-size:22px;line-height:1.4;border-radius:4px;'
                f'box-shadow:0 8px 20px #0009;font-style:italic">{_e(line)}<div style="text-align:right;margin-top:6px">— C.</div></div>'
@@ -276,7 +277,7 @@ def day(key: str, week: Any, i: int, img: Callable[[str], str], line: str = "", 
            ".plat{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:5px;font:800 13px sans-serif;"
            "display:inline-flex;align-items:center;justify-content:center}.po i .plat+.plat{right:34px}")
     side = (f'<img src="{pic}" style="position:absolute;right:30px;bottom:30px;width:{DAY_HOST_W - 20}px;height:380px;'
-            f'object-fit:contain;object-position:bottom">' if pic else "")
+            f'object-fit:contain;object-position:bottom;{fx}">' if pic else "")
     say = (f'<div class=bub style="right:30px;bottom:{420 if pic else 60}px;width:{DAY_HOST_W - 10}px;font-size:22px;'
            f'border:5px solid #f72ca2">{_e(line)}</div>' if line else "")
     inner = (f'<style>{css}</style><img src="{logo_data_url()}" style="position:absolute;left:40px;top:30px;height:66px">'
@@ -288,7 +289,7 @@ def day(key: str, week: Any, i: int, img: Callable[[str], str], line: str = "", 
 
 
 # ── the other two day layouts: the same host skins (heading, frames, chibi + line) ─────────
-def _skin(key: str, date: Any, n_word: str, pic: str, line: str) -> Dict[str, str]:
+def _skin(key: str, date: Any, n_word: str, pic: str, line: str, fx: str = "") -> Dict[str, str]:
     """A host's look for a day picture: page background, heading, the chibi + line on the right and
     the CSS for frames (.fr), names (.nm), times (.tm) and titles (.tt)."""
     plat = (".plat{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:5px;font:800 13px sans-serif;"
@@ -297,7 +298,7 @@ def _skin(key: str, date: Any, n_word: str, pic: str, line: str) -> Dict[str, st
             "position:relative}")
     if key == "clark":
         side = (f'<img src="{pic}" style="position:absolute;right:30px;bottom:40px;width:{DAY_HOST_W - 20}px;height:380px;'
-                f'object-fit:contain;object-position:bottom">' if pic else "")
+                f'object-fit:contain;object-position:bottom;{fx}">' if pic else "")
         say = (f'<div class=serif style="position:absolute;right:30px;bottom:{440 if pic else 60}px;width:{DAY_HOST_W - 20}px;'
                f'background:#f4ead8;color:#2b1d12;padding:18px 20px;font-size:22px;line-height:1.4;border-radius:4px;'
                f'box-shadow:0 8px 20px #0009;font-style:italic">{_e(line)}<div style="text-align:right;margin-top:6px">— C.</div></div>'
@@ -317,7 +318,7 @@ def _skin(key: str, date: Any, n_word: str, pic: str, line: str) -> Dict[str, st
                         ".stamp{position:absolute;border:4px solid #b8402a;color:#b8402a;font:700 24px 'DejaVu Serif',serif;"
                         "letter-spacing:3px;padding:6px 14px;transform:rotate(-6deg);background:#f4ead8cc}")}
     side = (f'<img src="{pic}" style="position:absolute;right:30px;bottom:30px;width:{DAY_HOST_W - 20}px;height:380px;'
-            f'object-fit:contain;object-position:bottom">' if pic else "")
+            f'object-fit:contain;object-position:bottom;{fx}">' if pic else "")
     say = (f'<div class=bub style="right:30px;bottom:{420 if pic else 60}px;width:{DAY_HOST_W - 10}px;font-size:22px;'
            f'border:5px solid #f72ca2">{_e(line)}</div>' if line else "")
     return {"body": "background:linear-gradient(135deg,#1b1018,#3d1233 60%,#2a0f2a);color:#fff",
@@ -336,7 +337,7 @@ def _skin(key: str, date: Any, n_word: str, pic: str, line: str) -> Dict[str, st
                     "transform:rotate(-5deg);box-shadow:3px 5px 10px #0007}")}
 
 
-def _day_alt(key: str, week: Any, i: int, img: Callable[[str], str], line: str, chibi_kind: str, layout: str) -> str:
+def _day_alt(key: str, week: Any, i: int, img: Callable[[str], str], line: str, chibi_kind: str, layout: str, fx: str = "") -> str:
     """The timeline and spotlight layouts of ``day``.
     timeline   one row per stream in time order: a time chip, the thumbnail, the name, the stream
                title and its length (Colette: sticky-note strips in turn; Clark: a ruled ledger page).
@@ -351,7 +352,7 @@ def _day_alt(key: str, week: Any, i: int, img: Callable[[str], str], line: str, 
     tiles = sorted(week.days[i], key=lambda t: t.at)
     n_word = f"{len(tiles)} stream{'' if len(tiles) == 1 else 's'}"
     pic = hosts.data_url(key, chibi_kind or "chibi_happy") or hosts.data_url(key, "chibi_happy")
-    sk = _skin(key, date, n_word, pic, line)
+    sk = _skin(key, date, n_word, pic, line, fx)
     clark = key == "clark"
     area_w = 1520 - DAY_HOST_W
 
