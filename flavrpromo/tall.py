@@ -38,6 +38,12 @@ top of the chunk's content). Any of them takes ``pscale`` (size in %, 100 = as b
 clockwise), ``pflip`` (mirrored), ``px`` / ``py`` (moved right / down in px) and ``ppop`` (may stick out
 over the neighbouring chunks instead of being cut off at this chunk's edges). ``figure`` works out where
 the picture goes; ``document`` draws it in its own layer.
+``look`` (stream chunks; owner 2026-11-22: "is there a good way to add the article styles, like this, to the chunk
+stacks as well?"): "" = the plain row, "strip" = a colourful tilted strip like the day pictures' (host_cards.py
+``_strip``): a time pill, the thumbnail in a white frame with its platform badges, "Name · length" and the title, the
+remark under them; every other strip swings to the right and carries its thumbnail on that side, and the strips
+take the host's note colours (or the colour scheme's) in turn. ``document`` numbers the strip chunks (``strip_k``)
+for that; the chunk's background stays the stack's own, so the strips sit on it like notes on a wall.
 ``show`` (stream and game chunks only; owner 2026-11-21 "mix n match the sort of content that goes into
 each segment") lists which parts are drawn, from SHOW; a chunk saved before it existed shows DEFAULT_SHOW.
 The "game" chunks and the stream chunks are what flavrpromo/recipes.py stacks into whole tall sections
@@ -62,7 +68,7 @@ import math
 from typing import Any, Dict, List, Tuple
 
 from . import hosts, schemes
-from .render import clock, hm, logo_data_url
+from .render import PLATFORM_BADGE, clock, hm, logo_data_url
 
 CHUNKS_KEY, TEMPLATES_KEY = "tall_chunks", "tall_templates"   # kv: saved chunks {name: chunk}, saved stacks {name: [chunk]}
 WEEK_FIELDS = ("ref", "game", "line", "lines", "hint")   # what belongs to one week: a stack saved as a template drops these
@@ -98,6 +104,8 @@ BAND_COLOURS = {"plum": ("Plum", "#2a0f2a"), "berry": ("Berry", "#521b4c"), "win
                 "night": ("Night", "#15101a"), "pink": ("Hot pink", "#b3187a"), "navy": ("Navy", "#14213d"),
                 "teal": ("Teal", "#0e4a4c"), "forest": ("Forest", "#173a24"), "cocoa": ("Cocoa", "#3a2416"),
                 "rust": ("Rust", "#7a3a14"), "gold": ("Gold", "#f8cf33"), "paper": ("Paper", "#f4ead8")}
+LOOKS = {"": "Plain row", "strip": "Colour strip (like the day pictures)"}     # a stream chunk's ``look``
+STRIP_SWING = 180                    # px a strip steps in from the left when it swings (every other one), as the day pictures do
 PIC_TYPES = ("header", "stats", "grid", "quote")      # chunk types whose host picture is optional (``pic``)
 # the picture controls every chunk has: field → (lowest, highest, default); see the docstring
 PIC_NUMBERS = {"pscale": (30, 400, 100), "prot": (-180, 180, 0), "px": (-1600, 1600, 0), "py": (-1200, 1200, 0)}
@@ -195,6 +203,14 @@ BUILTIN: Dict[str, List[Dict[str, Any]]] = {
         {"id": "c2", "type": "chat", "size": 1, "cut": "up", "lines": "", "host": "", "other": ""},
         {"id": "c3", "type": "stats", "size": 1, "cut": "peak"},
         {"id": "c4", "type": "footer", "size": 0, "host": "", "kind": "chibi_happy", "var": "", "line": ""},
+    ],
+    "Colour strips": [                  # four streams as the day pictures' colour strips (recipes.fill puts the streams in)
+        {"id": "c1", "type": "header", "size": 0, "title": "", "sub": ""},
+        {"id": "c2", "type": "stream", "size": 1, "look": "strip", "ref": "", "line": "", "host": "", "kind": "happy", "var": ""},
+        {"id": "c3", "type": "stream", "size": 1, "look": "strip", "ref": "", "line": "", "host": "", "kind": "happy", "var": ""},
+        {"id": "c4", "type": "stream", "size": 1, "look": "strip", "ref": "", "line": "", "host": "", "kind": "happy", "var": ""},
+        {"id": "c5", "type": "stream", "size": 1, "look": "strip", "ref": "", "line": "", "host": "", "kind": "happy", "var": ""},
+        {"id": "c6", "type": "footer", "size": 0, "host": "", "kind": "chibi_happy", "var": "", "line": ""},
     ],
     "Day in detail": [
         {"id": "c1", "type": "header", "size": 0, "title": "", "sub": ""},
@@ -403,6 +419,59 @@ def seam_up(c: Dict[str, Any], d: int, x: float) -> float:
     return float(pts[-1][1])
 
 
+def _strip_colours(ctx: Dict[str, Any]) -> Tuple[str, ...]:
+    """The strips' colours in turn: the colour scheme's note colours, else the picture's host's own."""
+    s = schemes.get(str(ctx.get("scheme") or "")) or schemes.BASE.get(ctx["host"]) or schemes.BASE["colette"]
+    return tuple(s["notes"])
+
+
+def _strip_row(c: Dict[str, Any], ctx: Dict[str, Any], h: int, t: Any, day_i: int, box: str) -> str:
+    """A stream chunk in the "strip" look (see the docstring): one coloured strip in a box ``h`` px tall.
+    ``ctx["strip_k"]`` = how many strips came before in the stack (set by ``document``): it picks the colour and
+    which strips swing. Shows what the chunk's ``show`` ticks say (time pill, picture, name and length, day and
+    game, title, remark). Clark's strips are straight with square corners (his file-folder tabs), Colette's tilt."""
+    th, week, img = ctx["theme"], ctx["week"], ctx["img"]
+    clark = ctx["host"] == "clark"
+    k = int(ctx.get("strip_k") or 0)
+    flip = k % 2 == 1
+    sh = max(60, h - 30)                              # the strip's height: a little air above and below it
+    fs = max(18, min(34, sh // 6))
+    fig = figure(c, ctx, h)                           # a host picture ("document" draws it) stands at the right end:
+    width = WIDTH - 140 - STRIP_SWING - (fig["room"] if fig else 0)     # the strip stops short of its room
+    src = img(t.thumb) or img(t.avatar)
+    bg = f'background-image:url(&quot;{_e(src)}&quot;);' if src else ""
+    length = hm(t.length) if t.kind == "past" and t.end else "LIVE" if t.kind == "live" else "scheduled"
+    title = t.title if shown(c, "hashtags") else " ".join(w for w in str(t.title).split() if not w.startswith("#"))
+    chip = (f'<div style="flex:none;width:{int(fs * 5.8)}px;background:{th["accent"]};color:#fff;font-size:{fs}px;font-weight:900;white-space:nowrap;'
+            f'text-align:center;padding:5px 0;border-radius:{6 if clark else 30}px">{_e(clock(t.at, week.tz))}</div>'
+            if shown(c, "when") else "")
+    badges = "".join(
+        f'<span style="position:absolute;top:10px;right:{10 + 28 * n}px;width:24px;height:24px;border-radius:5px;'
+        f'font:800 13px sans-serif;display:flex;align-items:center;justify-content:center;background:{bgc};color:{fgc}">{letter}</span>'
+        for n, (letter, bgc, fgc) in enumerate(PLATFORM_BADGE[p] for p in t.platforms if p in PLATFORM_BADGE))
+    pic = (f'<div style="position:relative;flex:none;width:{min(460, int((sh - 26) * 16 / 9))}px;height:{sh - 16}px;padding:5px;'
+           f'background:#fff;box-shadow:3px 6px 14px #0008"><div style="width:100%;height:100%;background:#2a1026 center/cover '
+           f'no-repeat;{bg}"></div>{badges}</div>' if shown(c, "thumb") else "")
+    place = " · ".join(x for x in ((week.day_name(day_i),) if shown(c, "when") else ()) + ((t.game,) if shown(c, "game") else ()) if x)
+    text = ((f'<div style="font-size:{fs + 4}px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+             f'{_e(t.name)}<span style="font-size:{fs - 4}px;font-weight:700;opacity:.7"> · {_e(length)}</span></div>'
+             if shown(c, "name") else "")
+            + (f'<div style="font-size:{fs - 6}px;font-weight:800;opacity:.75;white-space:nowrap;overflow:hidden;'
+               f'text-overflow:ellipsis">{_e(place)}</div>' if place else "")
+            + (f'<div style="font-size:{fs - 4}px;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+               f'{_e(title)}</div>' if shown(c, "title") and title else "")
+            + (f'<div style="margin-top:4px;font-size:{fs - 4}px;font-weight:700;display:-webkit-box;-webkit-line-clamp:2;'
+               f'-webkit-box-orient:vertical;overflow:hidden">“{_e(c["line"])}”</div>'
+               if shown(c, "line") and c.get("line") else ""))
+    inner = chip + ((f'<div style="flex:1;min-width:0">{text}</div>' + pic) if flip else (pic + f'<div style="flex:1;min-width:0">{text}</div>'))
+    pal = _strip_colours(ctx)
+    tilt = 0.0 if clark else (-0.6 if flip else 0.5)
+    return (f'<div style="{box}display:flex;align-items:center">'
+            f'<div style="display:flex;align-items:center;gap:18px;flex:none;width:{width}px;height:{sh}px;'
+            f'margin-left:{STRIP_SWING if flip else 0}px;padding:8px 16px;background:{pal[k % len(pal)]};color:{th["ink"]};'
+            f'border-radius:{4 if clark else 0}px;transform:rotate({tilt}deg);box-shadow:3px 5px 12px #0007">{inner}</div></div>')
+
+
 def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
     """One chunk's content in a box ``h`` px tall (its height minus what a cut takes off the bottom)."""
     th, week, img = ctx["theme"], ctx["week"], ctx["img"]
@@ -431,6 +500,8 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
         if t is None:
             return (f'<div style="{box}display:flex;align-items:center;font-size:30px;color:{th["gold"]}">'
                     f'Pick a stream from the menu.</div>')
+        if c.get("look") == "strip":
+            return _strip_row(c, ctx, h, t, day_i, box)
         src = img(t.thumb) or img(t.avatar)
         bg = f'background-image:url(&quot;{_e(src)}&quot;);' if src else ""
         when = clock(t.at, week.tz) + (f" · {hm(t.length)}" if t.kind == "past" and t.end else
@@ -577,7 +648,7 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
     th = ctx["theme"]
     bands = schemes.bands(scheme) or BANDS.get(ctx["host"], BANDS["colette"])
     cuts = [cut_depth(chunks, i) for i in range(len(chunks))]
-    n, y, rows, seams, pops = len(chunks), 0, [], [], ""
+    n, y, rows, seams, pops, strips_before = len(chunks), 0, [], [], "", 0
     for i, c in enumerate(chunks):
         h, d, above = height(c), cuts[i], (cuts[i - 1] if i else 0)
         own = band_colour(c)                      # the owner's pick wins over the automatic bands
@@ -612,7 +683,8 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
                           + img.replace("@TOP@", str(feet - fig["h"]), 1) + "</div>")
         rows.append(f'<div style="position:absolute;left:0;top:{y - above}px;width:{WIDTH}px;height:{h + above}px;'
                     f'z-index:{n - i};{bg}{clip}"><div style="position:absolute;left:0;top:{above}px;width:{WIDTH}px;'
-                    f'height:{h - d}px;overflow:hidden">{_draw(c, ctx, h - d)}</div>{inside}</div>')
+                    f'height:{h - d}px;overflow:hidden">{_draw(c, dict(ctx, strip_k=strips_before), h - d)}</div>{inside}</div>')
+        strips_before += c.get("type") == "stream" and c.get("look") == "strip"
         y += h
     stripes = ""
     for bottom, d, kind, shaped in seams:
@@ -632,5 +704,5 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
             f'<div style="position:absolute;left:0;top:0;z-index:100">{pops}</div></body></html>')
 
 
-__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SHAPED", "TEETH", "teeth", "edge", "SLOPES", "cut_depth", "seam_up", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
+__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SHAPED", "TEETH", "teeth", "edge", "SLOPES", "cut_depth", "seam_up", "LOOKS", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
            "tile_choices"]

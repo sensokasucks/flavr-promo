@@ -321,3 +321,46 @@ def test_a_host_picture_stands_on_the_seam_where_it_is_not_on_the_straight_line(
         assert f"top:{h - tall.figure(dict(foot, cut=''), dict(ctx, theme={}), h)['h']}px" in flat
     finally:
         hosts.init(None)
+
+
+def test_stream_chunks_can_be_colour_strips_like_the_day_pictures(tmp_path):
+    """Owner 2026-11-22: "is there a good way to add the article styles ... to the chunk stacks as well?" A stream
+    chunk with look "strip" is a tilted colour strip: time pill, framed picture with its platform badges, name and
+    length, title, remark; every other strip swings right with its picture on that side; the colours go in turn."""
+    hosts.init(tmp_path / "pics")
+    from types import SimpleNamespace
+    try:
+        def tile(n, name, plats):
+            return SimpleNamespace(name=name, game="Game" + str(n), title=f"title {n} #FlaVR", at=1700000000 + n * 9000, end=1, kind="past",
+                                   thumb="", avatar="", length=3600, platforms=plats, url="", links={})
+        week = SimpleNamespace(days=[[tile(0, "Traube", ["twitch"]), tile(1, "Cara", ["youtube"]), tile(2, "Ashe", ["twitch", "youtube"])]],
+                               day_name=lambda i: "MON", tz=None)
+        ctx = {"host": "colette", "week": week, "img": lambda u: "", "notes": [], "facts": {}, "heading": "H", "range": "R",
+               "seed": 1, "pins": {}}
+        chunks = [tall.new_chunk("stream", [], ref=f"d0:{i}", look="strip", line=f"remark {i}") for i in range(3)]
+        chunks = tall.renumber(chunks)
+        doc = tall.document(chunks, ctx)
+        pal = tall.schemes.BASE["colette"]["notes"]
+        assert all(f"background:{pal[i]}" in doc for i in range(3))                 # the host's note colours in turn
+        assert doc.count(f"margin-left:{tall.STRIP_SWING}px") == 1 and "rotate(0.5deg)" in doc and "rotate(-0.6deg)" in doc
+        assert "title 0" in doc and "#FlaVR" not in doc and "“remark 1”" in doc and "Traube" in doc and "1h 00m" in doc
+        assert ">T</span>" in doc and ">Y</span>" in doc                              # platform badges on the pictures
+        # the time pill is the accent colour with white lettering
+        assert f'background:{tall.THEMES["colette"]["accent"]};color:#fff' in doc
+        # the plain look is unchanged, and the ticks still decide what a strip shows
+        plain = tall.document([dict(chunks[0], look="")], ctx)
+        assert "rotate(0.5deg)" not in plain and "Traube" in plain
+        bare = tall.document([dict(chunks[0], show=["name"])], ctx)
+        assert "Traube" in bare and "title 0" not in bare and "remark 0" not in bare and ">T</span>" not in bare
+        # Clark's strips are straight; a colour scheme brings its own note colours
+        assert "rotate(0.0deg)" in tall.document(chunks, dict(ctx, host="clark"))
+        ocean = tall.document(chunks, dict(ctx, scheme="ocean"))
+        assert tall.schemes.get("ocean")["notes"][0] in ocean and pal[0] not in ocean
+        # a strip makes a stack no taller, and an unknown look is the plain row
+        assert tall.total(chunks) == 3 * tall.height(chunks[0])
+        assert "rotate(0.5deg)" not in tall.document([dict(chunks[0], look="zzz")], ctx)
+        # the built-in stack of strips fits and every stream chunk in it is a strip
+        built = tall.BUILTIN["Colour strips"]
+        assert tall.total(built) <= tall.MAX_H and [c["look"] for c in built if c["type"] == "stream"] == ["strip"] * 4
+    finally:
+        hosts.init(None)

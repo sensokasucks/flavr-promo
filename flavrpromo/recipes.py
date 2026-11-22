@@ -390,6 +390,17 @@ def apply_seams(chunks: List[Dict[str, Any]], seams: str) -> None:
             c["slope"] = 0
 
 
+def apply_look(chunks: List[Dict[str, Any]], look: str) -> None:
+    """Give every stream chunk of a stack the same ``look`` (a tall.LOOKS key: "" the plain row, "strip" the
+    colour strip of the day pictures). Other chunk types and an unknown key are left alone. Used by the
+    recipes and by the builder's Look card (flavrpromo/tall_page.py "looks")."""
+    if look not in tall.LOOKS:
+        return
+    for c in chunks:
+        if c.get("type") == "stream":
+            c["look"] = look
+
+
 def _pictures(title: str, subs: List[str], items: List[Dict[str, Any]], seams: Any) -> List[Tuple[str, List[Dict[str, Any]]]]:
     """Split ``items`` (stream / game chunks, no ids yet) over as few pictures as fit tall.MAX_H, in
     balanced groups, each with a header and, on the last one, a sign-off strip. Medium size first; small
@@ -413,10 +424,11 @@ def _pictures(title: str, subs: List[str], items: List[Dict[str, Any]], seams: A
     return out
 
 
-def build(recipe: str, p: Dict[str, Any], week: Any, arg: str = "", diagonal: Any = False
+def build(recipe: str, p: Dict[str, Any], week: Any, arg: str = "", diagonal: Any = False, look: str = ""
           ) -> Tuple[List[Tuple[str, List[Dict[str, Any]]]], str]:
     """([(section title, chunks)], error text). ``arg``: the day number for "day", the person's name
-    for "person". Empty list + a message when the week has nothing for that recipe."""
+    for "person". ``look``: a tall.LOOKS key for the stream chunks ("strip" = colour strips like the day
+    pictures; the games recipe has none). Empty list + a message when the week has nothing for that recipe."""
     if recipe == "games":
         rows = game_rows(p.get("facts") or {}, week)
         if not rows:
@@ -440,6 +452,7 @@ def build(recipe: str, p: Dict[str, Any], week: Any, arg: str = "", diagonal: An
     if not refs:
         return [], "No streams for that choice."
     items = [{"type": "stream", "ref": r, "line": "", "host": "", "kind": "happy", "var": ""} for r, _ in refs]
+    apply_look(items, look)
     if recipe == "person":                            # their name is the header: not again on every stream
         for x in items:
             x["show"] = [k for k in tall.DEFAULT_SHOW["stream"] if k != "name"]
@@ -489,5 +502,5 @@ def add_to_draft(p: Dict[str, Any], built: List[Tuple[str, List[Dict[str, Any]]]
     return ids
 
 
-__all__ = ["as_tall", "apply_seams", "stack_facts", "SUMMARY_TYPES", "RECIPES", "SEAMS", "build", "fill", "people", "add_to_draft", "write_line", "write_choices", "start_lines", "game_rows", "drawing_context",
+__all__ = ["as_tall", "apply_seams", "apply_look", "stack_facts", "SUMMARY_TYPES", "RECIPES", "SEAMS", "build", "fill", "people", "add_to_draft", "write_line", "write_choices", "start_lines", "game_rows", "drawing_context",
            "chunk_facts", "stream_facts", "game_facts", "AI_STATES", "LINE_TYPES", "next_tall_id"]
