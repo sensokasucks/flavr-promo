@@ -75,8 +75,10 @@ def _picture_menus(c: Dict[str, Any], p: Dict[str, Any]) -> str:
     key = c.get("host") if c.get("host") in hosts.HOSTS else p["host"]
     have = hosts.pictures(key)
     kinds = [(k, k.replace("_", " ")) for k in hosts.POOLED if have.get(k)]
-    vars_ = [("", "auto (the draft's pick)")] + [(v, "main" if v == "main" else f"#{v}")
-                                                 for v, _ in hosts.variants(key, c.get("kind") or "happy")]
+    # which picture of the kind's pool: the main one, a built-in extra ("b<n>", hosts._builtin_pool) or an upload ("<n>")
+    vars_ = [("", "auto (the draft's pick)")] + [
+        (v, "main" if v == "main" else f"built-in {v[1:]}" if v.startswith("b") else f"#{v}")
+        for v, _ in hosts.variants(key, c.get("kind") or "happy")]
     hopts = [("", f"The article's host ({hosts.HOSTS[p['host']]['name']})")] + [(k, h["name"]) for k, h in hosts.HOSTS.items()]
     return (f'<label>Host <select name="{c["id"]}__host">{_opts(hopts, c.get("host") or "")}</select></label> '
             f'<label>Pose <select name="{c["id"]}__kind">{_opts(kinds, c.get("kind"))}</select></label> '

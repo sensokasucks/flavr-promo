@@ -19,11 +19,11 @@ def _no_custom_groups():
 
 @pytest.fixture(autouse=True)
 def _banter_on():
-    """Each test starts with the hosts answering each other (the default; flavrpromo/hosts.py keeps the
-    switch in a module global that settings_page.save_hosts and hosts.load_overrides set)."""
+    """Each test starts with the hosts answering each other and every built-in extra picture in use (the
+    defaults; flavrpromo/hosts.py keeps both in module globals that hosts.load_overrides sets)."""
     from flavrpromo import hosts, kobold
-    hosts._banter = True
+    hosts._banter, hosts._hidden = True, frozenset()
     kobold._angle_edits.clear()
     yield
-    hosts._banter = True
+    hosts._banter, hosts._hidden = True, frozenset()
     kobold._angle_edits.clear()

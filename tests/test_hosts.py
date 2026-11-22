@@ -322,6 +322,47 @@ def test_built_in_pictures(tmp_path):
         hosts.init(None)
 
 
+def test_built_in_extra_pictures(tmp_path):
+    # the chibi kinds ship several pictures: the extras (host_art/<host>/pool/<kind>/<n>.webp, ids "b<n>") join
+    # the kind's pool while its main picture is the built-in one, can be switched off, and step aside for an upload
+    store = Store(":memory:")
+    hosts.init(tmp_path)
+    try:
+        ids = [v for v, _ in hosts.variants("clark", "chibi_happy")]
+        assert ids == ["main", "b1", "b2", "b3"]
+        assert hosts.exact("clark", "chibi_happy", "b2").parent.name == "chibi_happy"
+        assert [v for v, _ in hosts.variants("clark", "happy")] == ["main"]            # the regular poses have none
+        assert [v for v, _ in hosts.variants("clark", "chibi_head")] == ["main"]       # heads stay single
+        with hosts.look(None, {"chibi_happy": "b3"}):                                  # a pin picks one like any other
+            assert hosts.picture("clark", "chibi_happy").name == "3.webp"
+        assert hosts.add_to_pool("clark", "chibi_happy", b"mine", "x.png") == ""       # uploads come after them
+        assert [v for v, _ in hosts.variants("clark", "chibi_happy")] == ["main", "b1", "b2", "b3", "1"]
+        # switched off one by one (kv hosts_art_hidden), all back with one call
+        assert hosts.hide_builtin(store, "clark", "chibi_happy", "b2") and not hosts.hide_builtin(store, "clark", "chibi_happy", "b2")
+        assert not hosts.hide_builtin(store, "clark", "chibi_happy", "1")              # an upload is not a built-in
+        assert store.get(hosts.HIDDEN_SETTING) == ["clark/chibi_happy/b2"] and hosts.hidden_builtins("clark", "chibi_happy") == 1
+        assert [v for v, _ in hosts.variants("clark", "chibi_happy")] == ["main", "b1", "b3", "1"]
+        assert hosts.unhide_builtins(store, "clark", "chibi_happy") == 1 and store.get(hosts.HIDDEN_SETTING) == []
+        # your own main picture: only yours and your extra uploads are left
+        assert hosts.save_picture("clark", "chibi_happy", b"PNG", "own.png") == ""
+        assert [v for v, _ in hosts.variants("clark", "chibi_happy")] == ["main", "1"]
+        assert hosts.remove_picture("clark", "chibi_happy")
+        assert len(hosts.variants("clark", "chibi_happy")) == 5
+        # every built-in picture is a WebP, and every extra belongs to a pooled kind that has a main picture
+        for key in hosts.HOSTS:
+            pool = hosts.DEFAULTS / key / "pool"
+            for f in pool.glob("*/*"):
+                assert f.suffix == ".webp" and f.stem.isdigit() and f.parent.name in hosts.POOLED, f
+                assert (hosts.DEFAULTS / key / f"{f.parent.name}.webp").is_file(), f
+    finally:
+        hosts.init(None)
+    hosts.init(tmp_path, defaults=False)                                               # no built-ins: no extras either
+    try:
+        assert [v for v, _ in hosts.variants("colette", "chibi_happy")] == []
+    finally:
+        hosts.init(None)
+
+
 def test_opener_chibi_main_swaps_with_the_peek(tmp_path):
     hosts.init(tmp_path, defaults=False)
     try:

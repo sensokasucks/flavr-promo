@@ -129,7 +129,8 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             r = await c.get(f"/settings/article/picture?d={dkey}&sec=outro")
             assert r.status == 200 and len(await r.read()) > 1000
             # picture variations: with a pool the draft keeps its pick (seed), 🎲 changes it, a pin wins
-            assert "Picture variations" not in await (await c.get("/settings/article?group=flavr&which=week")).text()
+            # (the chibi kinds already have variations: their built-in extras, flavrpromo/host_art/<host>/pool)
+            assert 'name="pin_sleepy"' not in await (await c.get("/settings/article?group=flavr&which=week")).text()
             for n in (b"v-one", b"v-two", b"v-three"):
                 assert hosts.add_to_pool("colette", "sleepy", n * 400, "x.png") == ""
             page = await (await c.get("/settings/article?group=flavr&which=week")).text()
