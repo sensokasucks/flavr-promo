@@ -47,6 +47,9 @@ so one picture can mix regular and chibi pictures for more emotion); ``var`` pin
 that kind's pool ("" = the draft's automatic pick, hosts.look). Chunks can be saved by name
 (kv "tall_chunks" {name: chunk}) and whole stacks too (kv "tall_templates" {name: [chunk]}).
 
+Colours: the host's own THEMES / BANDS, or a colour scheme (ctx["scheme"], a flavrpromo/schemes.py key
+picked in the article editor) in the host's lettering; a chunk's own ``band`` colour wins either way.
+
 Who calls it: flavrpromo/tall_page.py (builder, preview) and flavrpromo/article_editor.py
 (the picture inside the article). Pure functions: no network, no Discord.
 """
@@ -58,11 +61,11 @@ import html
 import math
 from typing import Any, Dict, List, Tuple
 
-from . import hosts
+from . import hosts, schemes
 from .render import clock, hm, logo_data_url
 
 CHUNKS_KEY, TEMPLATES_KEY = "tall_chunks", "tall_templates"   # kv: saved chunks {name: chunk}, saved stacks {name: [chunk]}
-WEEK_FIELDS = ("ref", "game", "line", "lines")   # what belongs to one week: a stack saved as a template drops these
+WEEK_FIELDS = ("ref", "game", "line", "lines", "hint")   # what belongs to one week: a stack saved as a template drops these
 WIDTH = 1600
 MAX_H = 2133                         # px: the tallest picture X shows whole (3:4 at this width)
 # type → (label, heights small / medium / large in px)
@@ -165,6 +168,7 @@ def strip(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out = renumber(chunks)
     for c in out:
         c.pop("choices", None)                    # KoboldCpp's alternatives for this week's remark
+        c.pop("found", None), c.pop("found_q", None)      # the game picker's search (flavrpromo/tall_page.py)
         for k in WEEK_FIELDS:
             if k in c:
                 c[k] = ""
@@ -238,6 +242,16 @@ def _pic(ctx: Dict[str, Any], key: str, kind: str, var: str) -> str:
 
 def _host_of(c: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     return c.get("host") if c.get("host") in hosts.HOSTS else ctx["host"]
+
+
+def _accent(who: str, ctx: Dict[str, Any]) -> str:
+    """The accent colour for host ``who`` on this picture: their own (THEMES) in the hosts' own colours.
+    Under a colour scheme (ctx["scheme"], flavrpromo/schemes.py) the picture's host gets the scheme's
+    accent and the other host its second accent, so two speakers still tell apart."""
+    th = ctx["theme"]
+    if not ctx.get("scheme"):
+        return THEMES.get(who, th)["accent"]
+    return th["accent"] if who == ctx["host"] else th["gold"]
 
 
 def _bubble(text: str, th: Dict[str, str], accent: str, extra: str = "") -> str:
@@ -382,7 +396,7 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
                 f'<div style="font-size:30px;color:{th["gold"]};font-weight:700;margin-top:6px">{_e(sub)}</div></div></div>')
     if kind in ("host", "footer"):
         key = _host_of(c, ctx)
-        acc = THEMES.get(key, th)["accent"]
+        acc = _accent(key, ctx)
         right = c.get("side") == "right" and kind == "host"
         fig = figure(c, ctx, h)                 # the picture is drawn by ``document``; here only its room
         spacer = f'<div style="width:{fig["room"]}px;flex:none"></div>' if fig else ""
@@ -478,7 +492,7 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
                 f'{body}</div></div>')
     if kind == "hero":
         key = _host_of(c, ctx)
-        acc = THEMES.get(key, th)["accent"]
+        acc = _accent(key, ctx)
         title = c.get("title") or hosts.HOSTS[key]["name"].split()[0]
         sub = c.get("sub") or hosts.HOSTS[key]["role"]
         tag = c.get("tag") or ctx.get("range") or ""
@@ -511,7 +525,7 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
         for n, text in enumerate(rows):
             who = a if n % 2 == 0 else b
             avatar = _pic(ctx, who, "head", "") or _pic(ctx, who, "chibi_head", "")
-            acc = THEMES.get(who, th)["accent"]
+            acc = _accent(who, ctx)
             mine = n % 2 == 0
             av = (f'<div style="width:{min(96, row_h - 10)}px;height:{min(96, row_h - 10)}px;border-radius:50%;flex:none;'
                   f'background:{acc}{f' center/cover url({avatar})' if avatar else ''};border:4px solid #fff;box-shadow:0 4px 10px #0007"></div>')
@@ -534,9 +548,13 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
     heading, range, notes, facts, seed, pins (the draft's picture choices, hosts.look).
     Chunks are laid out one under the other; a chunk with a diagonal cut is clipped along its slanted
     bottom edge and the next chunk's background shows through the gap (it starts that much higher)."""
-    ctx = dict(ctx, theme=THEMES.get(ctx["host"], THEMES["colette"]))
+    # the colours: the host's own theme, or a colour scheme in the host's lettering (ctx["scheme"], a
+    # flavrpromo/schemes.py key from the article draft; "" or unknown = the host's own)
+    own = THEMES.get(ctx["host"], THEMES["colette"])
+    scheme = ctx.get("scheme") if schemes.get(str(ctx.get("scheme") or "")) else ""
+    ctx = dict(ctx, theme=schemes.theme(scheme, own["font"]) or own, scheme=scheme)
     th = ctx["theme"]
-    bands = BANDS.get(ctx["host"], BANDS["colette"])
+    bands = schemes.bands(scheme) or BANDS.get(ctx["host"], BANDS["colette"])
     cuts = [cut_depth(chunks, i) for i in range(len(chunks))]
     n, y, rows, seams, pops = len(chunks), 0, [], [], ""
     for i, c in enumerate(chunks):

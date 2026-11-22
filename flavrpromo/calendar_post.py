@@ -198,6 +198,8 @@ class CalendarPoster:
         # page link in the share DM; set by flavrpromo/__main__.py from WEB_ADDRESS (or found by itself)
         self.web_url = ""
         self.kobold = None                  # flavrpromo/kobold.py Kobold when KoboldCpp is set up (settings_page.apply)
+        self.game_info = None               # flavrpromo/gameinfo.py GameInfo (IGDB), set by flavrpromo/__main__.py: the tall
+                                            # picture builder's game picker and the remarks' game details
         self.kobold_env: dict = {}          # KOBOLD_URL / KOBOLD_KEY from the environment (flavrpromo/__main__.py)
         self.http = None                    # the shared aiohttp session (flavrpromo/__main__.py), for Kobold
         self._poke = asyncio.Event()

@@ -72,7 +72,9 @@ async def test_hosts_switches_and_pictures(tmp_path):
                 for gid, _, kinds in settings_page.PICTURE_GROUPS:
                     assert f'id="pics-{key}-{gid}"' in page
                     assert all(f'data-swap-id="pool-{key}-{k}"' in page for k in kinds)
-            assert "10 pictures · 0 your own" in page and "data-quick" in page
+            # ten kinds each plus the built-in chibi extras (Clark 7, Colette 9), tagged and with a ✕ that only hides
+            assert "17 pictures · 0 your own" in page and "19 pictures · 0 your own" in page and "data-quick" in page
+            assert "/settings/picture/clark/chibi_happy?v=b1" in page and "<span class=tag>built-in</span>" in page
             assert 'data-dropzone=add-colette-happy' in page and 'id="add-colette-happy"' in page
             assert 'data-dropzone=main-clark-head' in page and 'id="add-clark-head"' not in page   # heads stay single
             assert "value=reset" not in page                                       # nothing uploaded yet
@@ -85,11 +87,24 @@ async def test_hosts_switches_and_pictures(tmp_path):
             r = await c.post("/settings/picture", data=form, allow_redirects=False)
             assert "Saved" in r.headers["Location"] and hosts.pictures("clark")["head"] == "yours"
             page = await (await c.get("/settings/pictures")).text()
-            assert "main · yours" in page and "value=reset" in page and "10 pictures · 1 your own" in page
+            assert "main · yours" in page and "value=reset" in page and "17 pictures · 1 your own" in page
             r = await c.post("/settings/picture", data={"host": "clark", "kind": "head", "action": "reset"},
                              allow_redirects=False)
             assert hosts.pictures("clark")["head"] == "built-in"
             assert (await c.get("/settings/picture/clark/nope")).status == 404
+            # ✕ on a built-in extra only switches it off (kv hosts_art_hidden); a link on the row brings it back
+            assert (await c.get("/settings/picture/colette/chibi_desk?v=b1")).status == 200
+            r = await c.post("/settings/pool", data={"host": "colette", "kind": "chibi_desk", "vid": "b1", "action": "remove"},
+                             allow_redirects=False)
+            assert "Stopped%20using" in r.headers["Location"] and store.get(hosts.HIDDEN_SETTING) == ["colette/chibi_desk/b1"]
+            assert (hosts.DEFAULTS / "colette" / "pool" / "chibi_desk" / "1.webp").is_file()      # the file stays
+            page = await (await c.get("/settings/pictures")).text()
+            assert "colette/chibi_desk?v=b1" not in page and "↺ 1 built-in removed" in page and "18 pictures" in page
+            r = await c.post("/settings/pool", data={"host": "colette", "kind": "chibi_desk", "action": "unhide"},
+                             allow_redirects=False)
+            assert "back%20in%20use" in r.headers["Location"] and store.get(hosts.HIDDEN_SETTING) == []
+            page = await (await c.get("/settings/pictures")).text()
+            assert "colette/chibi_desk?v=b1" in page and "built-in removed" not in page
     finally:
         hosts.init(None)
 

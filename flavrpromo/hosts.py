@@ -15,8 +15,10 @@ This file holds who the hosts are, their pictures, which one presents a post, an
     picked on the picker page) and chibi_head. Built-in defaults of all ten (the owner's art) are in
     flavrpromo/host_art; an upload replaces one. A missing pose falls back to another pose,
     a missing chibi to another chibi; no pictures at all still works (text only).
-    Each kind (not the heads) is a POOL: the main picture plus extra uploads from the settings
-    page's Pictures tab (DATA_DIR/hosts/<host>/pool/<kind>/<n>.png); ``picture`` picks one at
+    Each kind (not the heads) is a POOL: the main picture, the built-in extras that come with it
+    (flavrpromo/host_art/<host>/pool/<kind>/<n>.webp, only while the main picture is the built-in
+    one) plus extra uploads from the settings page's Pictures tab
+    (DATA_DIR/hosts/<host>/pool/<kind>/<n>.png); ``picture`` picks one at
     random, or by the open article draft's seed / pin (``look``, article_editor.py).
   * Which host: random per post, but never the same one three times in a row (kv host_last), or
     always one when the owner picks it (/host setup only:). Off until /host setup on (kv hosts_on),
@@ -65,8 +67,10 @@ GAMES_MAX = 8                       # games listed in a review's facts (KoboldCp
 BUSY_PLANNED = 6                    # a Sunday preview with this many planned streams is "busy"
 
 _folder: Optional[Path] = None      # DATA_DIR/hosts (set by flavrpromo/__main__.py; None in tests = no pictures)
-# the built-in pictures (owner's art, 2026-11-21, transparent WebP, flavrpromo/host_art/<host>/<kind>.webp);
-# an upload of the same kind in DATA_DIR/hosts wins. Off until init (tests see no pictures).
+# the built-in pictures (owner's art, transparent WebP 900 px tall, flavrpromo/host_art/<host>/<kind>.webp;
+# first set 2026-11-21, the chibis and Clark's head redone from cleaner cut-outs 2026-11-22, which also
+# brought several pictures per chibi kind: the extras are in host_art/<host>/pool/<kind>/<n>.webp, see
+# ``_builtin_pool``); an upload of the same kind in DATA_DIR/hosts wins. Off until init (tests see no pictures).
 DEFAULTS = Path(__file__).resolve().parent / "host_art"
 _defaults = False
 
@@ -99,13 +103,21 @@ def choose(store: Store, rng: Optional[random.Random] = None) -> str:
 
 # ── pictures ───────────────────────────────────────────────────────────
 # Each picture kind ("happy", "chibi_desk", ...) is a POOL: the main picture (the owner's upload, else
-# the built-in one; id "main") plus any number of extra pictures uploaded on the settings page's
+# the built-in one; id "main"), the built-in extras of that kind (host_art/<host>/pool/<kind>/<n>.webp,
+# id "b<n>"; they only join while the main picture is the built-in one, so someone who uploads their
+# own character never gets ours mixed in, and each can be switched off on the Pictures tab, kv
+# hosts_art_hidden) plus any number of extra pictures uploaded on the settings page's
 # Pictures tab (data folder <host>/pool/<kind>/<n>.<ext>, id "<n>"). ``picture`` picks one of them:
 # the one pinned for the open article draft, else one chosen by the draft's seed (so a draft keeps
 # its pictures until the owner re-rolls), else at random (go-live recaps, day posts and so on).
 # Head pictures stay single: the go-live webhook avatar is compared with the file and must not flip.
 POOLED = tuple(k for k in KINDS if not k.endswith("head"))
-POOL_MAX = 12                       # extra pictures per kind
+POOL_MAX = 12                       # extra uploaded pictures per kind (built-in extras don't count)
+# built-in extras the owner switched off on the Pictures tab: kv hosts_art_hidden, a list of
+# "<host>/<kind>/b<n>". Read into ``_hidden`` by ``load_overrides``; changed by ``hide_builtin`` /
+# ``unhide_builtins`` (flavrpromo/settings_page.py save_pool). tests/conftest.py empties it.
+HIDDEN_SETTING = "hosts_art_hidden"
+_hidden: frozenset = frozenset()
 _look: ContextVar[Optional[Tuple[Optional[int], Dict[str, str]]]] = ContextVar("host_look", default=None)
 
 
@@ -144,12 +156,52 @@ def _pool_files(key: str, kind: str) -> List[Path]:
     return sorted(files, key=lambda f: (len(f.stem), f.stem))
 
 
+def _builtin_pool(key: str, kind: str, hidden: bool = False) -> List[Tuple[str, Path]]:
+    """The built-in extra pictures of a kind as ("b<n>", file), lowest number first. None while the
+    kind's main picture is an upload (or another pose standing in): the extras belong to the built-in
+    main picture. ``hidden`` True = only the ones switched off on the Pictures tab, else only the others."""
+    if not _defaults or key not in HOSTS or kind not in POOLED:
+        return []
+    base = _base(key, kind)
+    if base is None or base.parent != DEFAULTS / key or base.stem != kind:
+        return []
+    folder = DEFAULTS / key / "pool" / kind
+    files = [f for f in folder.glob("*") if f.is_file() and f.suffix.lower() in EXTS] if folder.is_dir() else []
+    files.sort(key=lambda f: (len(f.stem), f.stem))
+    return [(f"b{f.stem}", f) for f in files if (f"{key}/{kind}/b{f.stem}" in _hidden) == hidden]
+
+
+def hidden_builtins(key: str, kind: str) -> int:
+    """How many built-in extras of a kind are switched off (the Pictures tab's "bring back" button)."""
+    return len(_builtin_pool(key, kind, hidden=True))
+
+
+def hide_builtin(store: Store, key: str, kind: str, vid: str) -> bool:
+    """Pictures tab ✕ on a built-in extra: stop using it (True if it was in use). The file stays, so
+    ``unhide_builtins`` brings it back."""
+    if vid not in [v for v, _ in _builtin_pool(key, kind)]:
+        return False
+    store.put(HIDDEN_SETTING, sorted(set(_hidden) | {f"{key}/{kind}/{vid}"}))
+    load_overrides(store)
+    return True
+
+
+def unhide_builtins(store: Store, key: str, kind: str) -> int:
+    """Pictures tab: use every built-in extra of a kind again; returns how many came back."""
+    back = [f"{key}/{kind}/{v}" for v, _ in _builtin_pool(key, kind, hidden=True)]
+    store.put(HIDDEN_SETTING, sorted(set(_hidden) - set(back)))
+    load_overrides(store)
+    return len(back)
+
+
 def variants(key: str, kind: str) -> List[Tuple[str, Path]]:
-    """Every picture a kind can show: ("main", the main picture) then ("<n>", each extra upload)."""
+    """Every picture a kind can show: ("main", the main picture), ("b<n>", each built-in extra in use)
+    then ("<n>", each extra upload)."""
     out: List[Tuple[str, Path]] = []
     base = _base(key, kind)
     if base is not None:
         out.append(("main", base))
+    out += _builtin_pool(key, kind)
     out += [(f.stem, f) for f in _pool_files(key, kind)]
     return out
 
@@ -199,8 +251,8 @@ def add_to_pool(key: str, kind: str, data: bytes, filename: str) -> str:
 
 
 def remove_from_pool(key: str, kind: str, vid: str) -> bool:
-    """Settings page: delete one extra picture (True if it was there). The main picture goes with
-    ``remove_picture`` (back to built-in)."""
+    """Settings page: delete one extra upload (True if it was there). The main picture goes with
+    ``remove_picture`` (back to built-in), a built-in extra ("b<n>") with ``hide_builtin``."""
     for f in _pool_files(key, kind):
         if f.stem == vid:
             f.unlink()
@@ -471,10 +523,11 @@ def other(key: str) -> str:
 
 
 def load_overrides(store: Store) -> None:
-    """Read the edited lines and the banter switch (flavrpromo/__main__.py at start,
-    flavrpromo/settings_page.py after a save)."""
-    global _overrides, _banter
+    """Read the edited lines, the banter switch and the switched-off built-in extra pictures
+    (flavrpromo/__main__.py at start, flavrpromo/settings_page.py after a save)."""
+    global _overrides, _banter, _hidden
     _banter = store.get(BANTER_SETTING) is not False
+    _hidden = frozenset(str(x) for x in (store.get(HIDDEN_SETTING) or []))
     raw = store.get("host_templates") or {}
     _overrides = {k: {s: [str(x) for x in v] for s, v in (raw.get(k) or {}).items() if isinstance(v, list)}
                   for k in HOSTS}

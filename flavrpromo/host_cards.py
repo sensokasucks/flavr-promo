@@ -105,9 +105,11 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
             f'</div>') if chibi else ""
     left = 470 if pic else 60
     width = 1540 - left
+    # the big figure stands in a box that reaches from the card's left edge to the report / bubble (x 470),
+    # centred and on the floor of it: a wide picture (arms out) gets the whole width, a tall one the height
     rows = list(zip(notes, comments + [""] * len(notes)))
     if key == "clark":
-        img = f'<img src="{pic}" style="position:absolute;left:60px;top:170px;height:690px;max-width:400px;object-fit:contain;object-position:bottom">' if pic else ""
+        img = f'<img src="{pic}" style="position:absolute;left:14px;top:170px;height:690px;width:450px;object-fit:contain;object-position:bottom">' if pic else ""
         table = "".join(
             f'<tr style="border-bottom:1px solid #d8c3a3"><td style="padding:9px 0;color:#8a5a33">{_e(n["label"].title())}</td>'
             f'<td style="text-align:right"><b>{_e(n["value"])}</b>{(" · <i>" + _e(c) + "</i>") if c else ""}</td></tr>'
@@ -128,7 +130,7 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
                  f'{"The week\'s board follows. — C." if preview else "The full board follows. — C."}</div></div>')
         return _doc("background:linear-gradient(135deg,#1c130d,#3a2416 70%,#4a2a14);color:#f3e6d3", inner)
     # Colette
-    img = f'<img src="{pic}" style="position:absolute;left:40px;top:160px;height:700px;max-width:420px;object-fit:contain;object-position:bottom">' if pic else ""
+    img = f'<img src="{pic}" style="position:absolute;left:14px;top:160px;height:700px;width:450px;object-fit:contain;object-position:bottom">' if pic else ""
     step = (width - 20) // 3
     stickies = "".join(
         f'<div class=note style="left:{left + 10 + i * step}px;top:{480 + (i % 2) * 30}px;transform:rotate({NOTE_TILT[i]});'
@@ -150,11 +152,12 @@ def opener(key: str, heading: str, range_text: str, line: str, notes: List[Dict[
 
 def desk(key: str, highlight: str, nudge: str, signoff: str, kind: str = "desk") -> str:
     """The closing desk card."""
-    # ``kind``: "desk" or "chibi_desk" (picked on the picker page, flavrpromo/host_picker.py)
+    # ``kind``: "desk" or "chibi_desk" (picked on the picker page, flavrpromo/host_picker.py). The picture
+    # fills its panel and is kept at the top (object-position), so a taller one loses desk, not hair.
     pic = hosts.data_url(key, kind) or hosts.data_url(key, "desk")
     if key == "clark":
         left = 700 if pic else 60
-        img = f'<img src="{pic}" style="position:absolute;left:0;top:0;width:700px;height:900px;object-fit:cover">' if pic else ""
+        img = f'<img src="{pic}" style="position:absolute;left:0;top:0;width:700px;height:900px;object-fit:cover;object-position:top">' if pic else ""
         text = "<br><br>".join(_e(x) for x in (highlight, nudge) if x)
         inner = (f'{img}<div style="position:absolute;left:{left}px;top:0;right:0;height:900px;background:linear-gradient(135deg,#2a1c12,#3b2416)"></div>'
                  f'<div class=serif style="position:absolute;left:{left + 70}px;top:60px;font-size:30px;color:#e0782e">Closing notes</div>'
@@ -164,7 +167,7 @@ def desk(key: str, highlight: str, nudge: str, signoff: str, kind: str = "desk")
                  f'{_e(signoff)}</div>')
         return _doc("background:#1c130d", inner)
     left = 960 if pic else 60
-    img = (f'<img src="{pic}" style="position:absolute;left:0;top:0;width:960px;height:900px;object-fit:cover">'
+    img = (f'<img src="{pic}" style="position:absolute;left:0;top:0;width:960px;height:900px;object-fit:cover;object-position:top">'
            f'<div style="position:absolute;left:900px;top:0;width:700px;height:900px;'
            f'background:linear-gradient(90deg,#1b101800,#2a1026 12%)"></div>') if pic else ""
     inner = (f'{img}<div style="position:absolute;left:{left + 30}px;top:50px;font-size:26px;color:#f8cf33;font-weight:800;'
