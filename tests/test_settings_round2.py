@@ -185,6 +185,24 @@ async def test_article_editor_builds_section_by_section(tmp_path):
             p = await act("save", on_summary="", day_layout="wall", **{f"daylayout_{day[3:]}": "spotlight"})
             await c.get(f"/settings/article/day?d={dkey}&day={day[3:]}")
             assert "TOP PICK" in poster.shooter.docs[-1]
+            # the day picture's host picture: a pose menu and a "which one" menu per day (owner 2026-11-22), saved in the draft
+            p = await act("save", on_summary="", day_look="host", **{f"daykind_{day[3:]}": "chibi_pointing", f"dayvar_{day[3:]}": "nonsense"})
+            assert p["day_kinds"][day[3:]] == "chibi_pointing" and p["day_vars"][day[3:]] == ""      # an unknown picture id is dropped
+            p = await act("save", on_summary="", **{f"daykind_{day[3:]}": "nonsense"})
+            assert p["day_kinds"][day[3:]] == ""
+            page = await (await c.get("/settings/article?group=flavr&which=week")).text()
+            assert f'name="daykind_{day[3:]}"' in page and f'name="dayvar_{day[3:]}"' in page
+            assert f'name="dayfig_pscale_{day[3:]}"' in page and f'name="dayfig_pflip_{day[3:]}"' in page
+            # size / turn / move / mirror: clamped like the chunks', drawn as a transform on the host picture
+            d = day[3:]
+            p = await act("save", on_summary="", **{f"dayfig_on_{d}": "1", f"dayfig_pscale_{d}": "150", f"dayfig_prot_{d}": "9999",
+                                                    f"dayfig_px_{d}": "-40", f"dayfig_py_{d}": "x", f"dayfig_pflip_{d}": "1"})
+            assert p["day_figs"][d] == {"pscale": 150, "prot": 180, "px": -40, "py": 0, "pflip": True}
+            await c.get(f"/settings/article/day?d={dkey}&day={d}")
+            assert "translate(-40px,0px) rotate(180deg) scale(1.50) scaleX(-1)" in poster.shooter.docs[-1]
+            p = await act("save", on_summary="", **{f"dayfig_on_{d}": "1"})        # everything off the page = defaults again
+            await c.get(f"/settings/article/day?d={dkey}&day={d}")
+            assert "transform-origin:50% 100%" not in poster.shooter.docs[-1] and p["day_figs"][d]["pscale"] == 100
             p = await act("save", on_summary="", day_look="board")
             view = await (await c.get(f"/settings/article/view?d={dkey}")).text()
             assert "/calendar/day.png" in view.split('id="body"')[1]

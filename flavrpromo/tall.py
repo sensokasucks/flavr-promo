@@ -341,6 +341,20 @@ def has_figure(c: Dict[str, Any]) -> bool:
     return t in ("host", "footer", "hero", "desk") or (t in SHOW and shown(c, "host")) or (t in PIC_TYPES and bool(c.get("pic")))
 
 
+def picture_css(c: Dict[str, Any]) -> str:
+    """The CSS transform for a host picture's own controls (``px`` / ``py`` move, ``prot`` turn, ``pscale`` size %, ``pflip``
+    mirror; PIC_NUMBERS), applied around its feet (transform-origin 50% 100%). Used by ``figure`` and by the article
+    editor's day pictures (``picture_fx``)."""
+    return (f"translate({_num(c, 'px')}px,{_num(c, 'py')}px) rotate({_num(c, 'prot')}deg) "
+            f"scale({_num(c, 'pscale') / 100:.2f})" + (" scaleX(-1)" if c.get("pflip") else ""))
+
+
+def picture_fx(c: Dict[str, Any]) -> str:
+    """``picture_css`` as a style fragment for host_cards.day's ``fx`` ("" when every control is at its default)."""
+    css = picture_css(c)
+    return "" if css == picture_css({}) else f"transform-origin:50% 100%;transform:{css}"
+
+
 def figure(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> Dict[str, Any]:
     """Where the chunk's host picture goes in a box ``h`` px tall: {src, x, w, h (the picture's own box, standing
     on the chunk's bottom edge), room, css (its transform), pop}; {} when the chunk has none or the picture is missing.
@@ -371,8 +385,7 @@ def figure(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> Dict[str, Any]:
         room = max(40, min(int(WIDTH * 0.45), pw * _num(c, "pscale") // 100))
         left = 70 if not (t in SHOW or (t == "host" and c.get("side") == "right")) else WIDTH - 70 - room
         x = left + (room - pw) // 2
-    css = (f"translate({_num(c, 'px')}px,{_num(c, 'py')}px) rotate({_num(c, 'prot')}deg) "
-           f"scale({_num(c, 'pscale') / 100:.2f})" + (" scaleX(-1)" if c.get("pflip") else ""))
+    css = picture_css(c)
     return {"src": src, "x": x, "w": pw, "h": ph, "room": room, "css": css, "pop": bool(c.get("ppop"))}
 
 
@@ -997,5 +1010,5 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
             f'<div style="position:absolute;left:0;top:0;z-index:100">{pops}</div></body></html>')
 
 
-__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SHAPED", "TEETH", "teeth", "edge", "SLOPES", "cut_depth", "seam_up", "LOOKS", "HEADER_LOOKS", "GRID_LAYOUTS", "STATS_LOOKS", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
+__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SHAPED", "TEETH", "teeth", "edge", "SLOPES", "cut_depth", "seam_up", "picture_css", "picture_fx", "LOOKS", "HEADER_LOOKS", "GRID_LAYOUTS", "STATS_LOOKS", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
            "tile_choices"]
