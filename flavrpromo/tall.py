@@ -8,7 +8,8 @@ add up to at most MAX_H pixels. This file is the model and the drawing; the buil
 saving) is flavrpromo/tall_page.py, and the article editor adds a tall picture as a section
 (flavrpromo/article_editor.py).
 
-A chunk is a dict: {"id", "type", "size" (0 small, 1 medium, 2 large), "cut", "slope", ...fields of its type}.
+A chunk is a dict: {"id", "type", "size" (0 small, 1 medium, 2 large), "cut", "slope", "band", ...fields of its type}.
+``band`` is the chunk's own background colour (a BAND_COLOURS key or "#rrggbb"; "" = automatic).
 ``cut`` is the shape of the chunk's bottom edge: "" straight, "down" slanting down to the right, "up"
 slanting down to the left (owner 2026-11-21: diagonal cuts "add a more fun feel"); ``slope`` 0 / 1 / 2 is
 how steep (SLOPES px). A chunk with a cut, and the one under it, get their own background colour (BANDS)
@@ -27,6 +28,14 @@ own bottom, so its content gets a little less room).
                                                                                               lines (one per row), host, other
   quote    one big line of text                                                              text
   footer   a closing strip: the host's small picture and a sign-off line                    host, kind, var, line
+Host pictures (owner 2026-11-22: "the character image turned out really small. would be nice if i can
+scale, rotate, flip them. and being able to add a host image in each chunk"): every chunk type can carry
+one. Host / footer / hero chunks always have theirs, stream and game chunks when "host" is ticked in
+``show``, and header / stats / grid / quote chunks when ``pic`` is on (``side`` left or right; it sits on
+top of the chunk's content). Any of them takes ``pscale`` (size in %, 100 = as built), ``prot`` (degrees,
+clockwise), ``pflip`` (mirrored), ``px`` / ``py`` (moved right / down in px) and ``ppop`` (may stick out
+over the neighbouring chunks instead of being cut off at this chunk's edges). ``figure`` works out where
+the picture goes; ``document`` draws it in its own layer.
 ``show`` (stream and game chunks only; owner 2026-11-21 "mix n match the sort of content that goes into
 each segment") lists which parts are drawn, from SHOW; a chunk saved before it existed shows DEFAULT_SHOW.
 The "game" chunks and the stream chunks are what flavrpromo/recipes.py stacks into whole tall sections
@@ -69,7 +78,7 @@ TYPES: Dict[str, Any] = {
 # what a stream / game chunk can show (the builder's tick boxes) and what a new one shows
 SHOW: Dict[str, Dict[str, str]] = {
     "stream": {"thumb": "Stream picture", "name": "Name", "when": "Day and time", "game": "Game", "title": "Stream title",
-               "line": "Remark", "host": "Host picture"},
+               "hashtags": "Hashtags in the title", "line": "Remark", "host": "Host picture"},
     "game": {"people": "Who played it", "count": "Number of streams", "tags": "History tags (new, part 4 ...)",
              "genre": "Genre", "about": "What it is (IGDB)", "line": "Remark", "host": "Host picture"},
 }
@@ -77,6 +86,15 @@ DEFAULT_SHOW: Dict[str, Tuple[str, ...]] = {
     "stream": ("thumb", "name", "when", "game", "title", "line"),
     "game": ("people", "count", "tags", "genre", "about", "line"),
 }
+# the band colour menu of every chunk (``band``: a key here, or "#rrggbb" from the colour box; "" = automatic:
+# the theme background, or the host's BANDS in turn next to a cut). Owner 2026-11-22: "a colour menu per chunk".
+BAND_COLOURS = {"plum": ("Plum", "#2a0f2a"), "berry": ("Berry", "#521b4c"), "wine": ("Wine", "#3d1233"),
+                "night": ("Night", "#15101a"), "pink": ("Hot pink", "#b3187a"), "navy": ("Navy", "#14213d"),
+                "teal": ("Teal", "#0e4a4c"), "forest": ("Forest", "#173a24"), "cocoa": ("Cocoa", "#3a2416"),
+                "rust": ("Rust", "#7a3a14"), "gold": ("Gold", "#f8cf33"), "paper": ("Paper", "#f4ead8")}
+PIC_TYPES = ("header", "stats", "grid", "quote")      # chunk types whose host picture is optional (``pic``)
+# the picture controls every chunk has: field → (lowest, highest, default); see the docstring
+PIC_NUMBERS = {"pscale": (30, 400, 100), "prot": (-180, 180, 0), "px": (-1600, 1600, 0), "py": (-1200, 1200, 0)}
 TAG_WORDS = {"new": "NEW GAME", "staple": "STAPLE", "back": "BACK AGAIN"}     # "part:4" reads PART 4
 SIDES = {"left": "Host on the left", "right": "Host on the right"}
 CUTS = {"": "Straight edge", "down": "Slants down to the right ↘", "up": "Slants down to the left ↙",
@@ -139,6 +157,7 @@ def strip(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     chat lines) emptied. recipes.fill puts this week's streams and games in when it is used."""
     out = renumber(chunks)
     for c in out:
+        c.pop("choices", None)                    # KoboldCpp's alternatives for this week's remark
         for k in WEEK_FIELDS:
             if k in c:
                 c[k] = ""
@@ -173,6 +192,20 @@ BUILTIN: Dict[str, List[Dict[str, Any]]] = {
         {"id": "c4", "type": "quote", "size": 0, "text": ""},
     ],
 }
+
+
+def band_colour(c: Dict[str, Any]) -> str:
+    """The chunk's own background colour as "#rrggbb", "" when it is left automatic (or the value is nonsense)."""
+    b = str(c.get("band") or "")
+    if b in BAND_COLOURS:
+        return BAND_COLOURS[b][1]
+    return b.lower() if len(b) == 7 and b[0] == "#" and all(x in "0123456789abcdefABCDEF" for x in b[1:]) else ""
+
+
+def _is_light(colour: str) -> bool:
+    """Whether dark text reads better on ``colour`` ("#rrggbb"): its perceived brightness is over 60%."""
+    r, g, b = (int(colour[i:i + 2], 16) for i in (1, 3, 5))
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6
 
 
 def shown(c: Dict[str, Any], part: str) -> bool:
@@ -217,12 +250,57 @@ def _remark(c: Dict[str, Any], th: Dict[str, str], f: float) -> str:
 
 
 def _side_host(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
-    """A host picture at the right end of a stream / game chunk (when "host" is ticked)."""
-    if not shown(c, "host"):
-        return ""
-    pic = _pic(ctx, _host_of(c, ctx), c.get("kind") or "happy", c.get("var") or "")
-    return (f'<img src="{pic}" style="height:{h - 24}px;width:{int((h - 24) * 0.8)}px;flex:none;object-fit:contain;'
-            f'object-position:bottom;align-self:flex-end">' if pic else "")
+    """Room at the right end of a stream / game chunk for its host picture (when "host" is ticked; the
+    picture itself is drawn by ``document`` from ``figure``)."""
+    fig = figure(c, ctx, h)
+    return f'<div style="width:{fig["room"]}px;flex:none"></div>' if fig else ""
+
+
+def _num(c: Dict[str, Any], field: str) -> int:
+    lo, hi, default = PIC_NUMBERS[field]
+    try:
+        return max(lo, min(hi, int(c.get(field, default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def has_figure(c: Dict[str, Any]) -> bool:
+    """Whether the chunk shows a host picture (so the builder offers its size / rotate / flip controls)."""
+    t = c.get("type")
+    return t in ("host", "footer", "hero") or (t in SHOW and shown(c, "host")) or (t in PIC_TYPES and bool(c.get("pic")))
+
+
+def figure(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> Dict[str, Any]:
+    """Where the chunk's host picture goes in a box ``h`` px tall: {src, x, w, h (the picture's own box, standing
+    on the chunk's bottom edge), room, css (its transform), pop}; {} when the chunk has none or the picture is missing.
+    The box is the size the chunk was designed with; ``pscale`` etc. are applied on top as a CSS transform
+    around the picture's feet, so the text next to it stays where it is."""
+    if not has_figure(c):
+        return {}
+    src = _pic(ctx, _host_of(c, ctx), c.get("kind") or "happy", c.get("var") or "")
+    if not src:
+        return {}
+    t = c.get("type")
+    room = 0                                          # px of the row kept free for it (pictures beside the text only)
+    if t == "hero":
+        ph = int(h * 0.98)
+        pw = int(min(WIDTH * 0.46, ph * 0.9))
+        x = WIDTH - 50 - pw
+    elif t in PIC_TYPES:
+        ph = h - 10
+        pw = int(ph * 0.8)
+        x = 40 if c.get("side") == "left" else WIDTH - 40 - pw
+    else:
+        # beside the text (host moment, sign-off, stream, game): the room kept free for it grows and shrinks with
+        # its size, so a bigger host pushes the bubble / text aside instead of covering it (at most 45% of the width)
+        ph = h - (24 if t in SHOW else 30)
+        pw = int(ph * 0.8)
+        room = max(40, min(int(WIDTH * 0.45), pw * _num(c, "pscale") // 100))
+        left = 70 if not (t in SHOW or (t == "host" and c.get("side") == "right")) else WIDTH - 70 - room
+        x = left + (room - pw) // 2
+    css = (f"translate({_num(c, 'px')}px,{_num(c, 'py')}px) rotate({_num(c, 'prot')}deg) "
+           f"scale({_num(c, 'pscale') / 100:.2f})" + (" scaleX(-1)" if c.get("pflip") else ""))
+    return {"src": src, "x": x, "w": pw, "h": ph, "room": room, "css": css, "pop": bool(c.get("ppop"))}
 
 
 def _tile_of(ref: str, week: Any) -> Tuple[int, Any]:
@@ -269,15 +347,13 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
                 f'<div style="font-size:30px;color:{th["gold"]};font-weight:700;margin-top:6px">{_e(sub)}</div></div></div>')
     if kind in ("host", "footer"):
         key = _host_of(c, ctx)
-        pic = _pic(ctx, key, c.get("kind") or "happy", c.get("var") or "")
         acc = THEMES.get(key, th)["accent"]
         right = c.get("side") == "right" and kind == "host"
-        img_h = h - 30
-        figure = (f'<img src="{pic}" style="height:{img_h}px;width:{int(img_h * 0.8)}px;object-fit:contain;'
-                  f'object-position:bottom;align-self:flex-end">' if pic else "")
+        fig = figure(c, ctx, h)                 # the picture is drawn by ``document``; here only its room
+        spacer = f'<div style="width:{fig["room"]}px;flex:none"></div>' if fig else ""
         who = f'<div style="margin-top:12px;font-size:24px;color:{th["gold"]};font-weight:700">— {_e(hosts.HOSTS[key]["name"])}</div>'
         say = (f'<div style="flex:1">{_bubble(c.get("line") or "", th, acc)}{who if c.get("line") else ""}</div>')
-        parts = [say, figure] if right else [figure, say]
+        parts = [say, spacer] if right else [spacer, say]
         return (f'<div style="{box}display:flex;gap:40px;align-items:center;'
                 f'{"border-top:6px solid " + acc + ";" if kind == "footer" else ""}">{"".join(parts)}</div>')
     if kind == "stream":
@@ -290,6 +366,8 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
         when = clock(t.at, week.tz) + (f" · {hm(t.length)}" if t.kind == "past" and t.end else
                                        " · LIVE" if t.kind == "live" else "")
         th_w = int((h - 40) * 16 / 9)
+        # "#FlaVR #vtuber ..." at the end of a title is noise in a picture: dropped unless "hashtags" is ticked
+        title = t.title if shown(c, "hashtags") else " ".join(w for w in str(t.title).split() if not w.startswith("#"))
         f = min(1.0, h / 230)                     # a stream chunk with a deep cut has less room: smaller type
         place = " · ".join(x for x in ((week.day_name(day_i), when) if shown(c, "when") else ()) + ((t.game,) if shown(c, "game") else ()) if x)
         thumb = (f'<div style="width:{th_w}px;height:{h - 40}px;flex:none;border-radius:8px;background:#2a1026 center/cover;{bg}'
@@ -298,7 +376,7 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
                 + (f'<div style="font-size:{int(28 * f)}px;color:{th["gold"]};font-weight:700;margin:2px 0 {int(8 * f)}px">'
                    f'{_e(place)}</div>' if place else "")
                 + (f'<div style="font-size:{int(24 * f)}px;opacity:.85;font-style:italic;white-space:nowrap;overflow:hidden;'
-                   f'text-overflow:ellipsis">{_e(t.title)}</div>' if shown(c, "title") and t.title else "")
+                   f'text-overflow:ellipsis">{_e(title)}</div>' if shown(c, "title") and title else "")
                 + _remark(c, th, f))
         return (f'<div style="{box}display:flex;gap:34px;align-items:center">{thumb}'
                 f'<div style="flex:1;min-width:0">{text}</div>{_side_host(c, ctx, h)}</div>')
@@ -365,7 +443,6 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
                 f'{body}</div></div>')
     if kind == "hero":
         key = _host_of(c, ctx)
-        pic = _pic(ctx, key, c.get("kind") or "happy", c.get("var") or "")
         acc = THEMES.get(key, th)["accent"]
         title = c.get("title") or hosts.HOSTS[key]["name"].split()[0]
         sub = c.get("sub") or hosts.HOSTS[key]["role"]
@@ -373,9 +450,7 @@ def _draw(c: Dict[str, Any], ctx: Dict[str, Any], h: int) -> str:
         big = min(210, int(h * 0.42), int(WIDTH * 0.47 / (0.8 * max(4, len(title)))))      # a long name must stay off the panel
         panel = (f'<div style="position:absolute;right:0;top:0;width:{int(WIDTH * 0.52)}px;height:100%;background:{acc};'
                  f'clip-path:polygon(24% 0,100% 0,100% 100%,0 100%)"></div>')
-        figure = (f'<img src="{pic}" style="position:absolute;right:50px;bottom:0;height:{int(h * 0.98)}px;max-width:{int(WIDTH * 0.46)}px;'
-                  f'object-fit:contain;object-position:bottom">' if pic else "")
-        return (f'<div style="position:relative;height:{h}px;overflow:hidden">{panel}{figure}'
+        return (f'<div style="position:relative;height:{h}px;overflow:hidden">{panel}'
                 f'<div style="position:absolute;left:70px;top:0;height:100%;width:{int(WIDTH * 0.52)}px;display:flex;flex-direction:column;'
                 f'justify-content:center"><div style="font-size:{int(big * 0.42)}px;font-weight:800">{_e(c.get("top"))}</div>'
                 f'<div style="font-size:{big}px;line-height:1;font-weight:900;color:{acc};letter-spacing:-2px;text-transform:uppercase;'
@@ -418,10 +493,12 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
     th = ctx["theme"]
     bands = BANDS.get(ctx["host"], BANDS["colette"])
     cuts = [cut_depth(chunks, i) for i in range(len(chunks))]
-    n, y, rows, seams = len(chunks), 0, [], []
+    n, y, rows, seams, pops = len(chunks), 0, [], [], ""
     for i, c in enumerate(chunks):
         h, d, above = height(c), cuts[i], (cuts[i - 1] if i else 0)
-        bg = f"background:{bands[i % len(bands)]};" if (d or above) else ""
+        own = band_colour(c)                      # the owner's pick wins over the automatic bands
+        bg = (f"background:{own};" + (f"color:{th['ink']};" if _is_light(own) else "") if own
+              else f"background:{bands[i % len(bands)]};" if (d or above) else "")
         clip = ""
         if d:
             kind = c.get("cut")
@@ -431,9 +508,20 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
                     "peak": f"0 0,100% 0,100% 100%,{V_AT}% calc(100% - {d}px),0 100%"}[kind]
             clip = f"clip-path:polygon({poly});"
             seams.append((y + h, d, kind))
+        # the host picture: standing on the chunk's bottom edge, turned / scaled around its feet. Inside the
+        # chunk it is cut off at the chunk's edges; with ``ppop`` it goes in a layer over the whole picture.
+        fig, inside = figure(c, ctx, h - d), ""
+        if fig:
+            img = (f'<img src="{fig["src"]}" style="position:absolute;left:{fig["x"]}px;top:@TOP@px;width:{fig["w"]}px;'
+                   f'height:{fig["h"]}px;object-fit:contain;object-position:bottom;transform-origin:50% 100%;'
+                   f'transform:{fig["css"]}">')
+            if fig["pop"]:
+                pops += img.replace("@TOP@", str(y + h - d - fig["h"]), 1)
+            else:
+                inside = img.replace("@TOP@", str(h - d - fig["h"]), 1)
         rows.append(f'<div style="position:absolute;left:0;top:{y - above}px;width:{WIDTH}px;height:{h + above}px;'
                     f'z-index:{n - i};{bg}{clip}"><div style="position:absolute;left:0;top:{above}px;width:{WIDTH}px;'
-                    f'height:{h - d}px">{_draw(c, ctx, h - d)}</div></div>')
+                    f'height:{h - d}px;overflow:hidden">{_draw(c, ctx, h - d)}{inside}</div></div>')
         y += h
     stripes = ""
     for bottom, d, kind in seams:
@@ -448,8 +536,9 @@ def document(chunks: List[Dict[str, Any]], ctx: Dict[str, Any]) -> str:
            f'viewBox="0 0 {WIDTH} {max(1, y)}">{stripes}</svg>') if stripes else ""
     return (f'<!doctype html><html><head><meta charset=utf-8><style>*{{box-sizing:border-box;margin:0}}'
             f'body{{position:relative;width:{WIDTH}px;height:{max(1, y)}px;overflow:hidden;background:{th["bg"]};color:{th["fg"]};'
-            f'font-family:{th["font"]}}}</style></head><body>{"".join(rows)}{svg}</body></html>')
+            f'font-family:{th["font"]}}}</style></head><body>{"".join(rows)}{svg}'
+            f'<div style="position:absolute;left:0;top:0;z-index:100">{pops}</div></body></html>')
 
 
-__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "tag_words", "CUTS", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
+__all__ = ["WIDTH", "MAX_H", "TYPES", "SIDES", "CHUNKS_KEY", "TEMPLATES_KEY", "strip", "SHOW", "DEFAULT_SHOW", "shown", "has_figure", "figure", "PIC_TYPES", "PIC_NUMBERS", "BAND_COLOURS", "band_colour", "tag_words", "CUTS", "SLOPES", "cut_depth", "BUILTIN", "height", "total", "new_chunk", "renumber", "document",
            "tile_choices"]

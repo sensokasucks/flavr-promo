@@ -200,3 +200,90 @@ def test_v_cuts_hero_and_chat_chunks(tmp_path):
         assert tall.total(tall.BUILTIN["Hero and chat (diagonal)"]) <= tall.MAX_H
     finally:
         hosts.init(None)
+
+
+def test_host_pictures_scale_turn_flip_and_sit_on_any_chunk(tmp_path):
+    """Owner 2026-11-22: scale / rotate / flip the character, and a host picture on every chunk type."""
+    hosts.init(tmp_path / "pics")                   # built-in pictures on
+    from types import SimpleNamespace
+    week = SimpleNamespace(days=[[]], day_name=lambda i: "SUN", tz=None)
+    ctx = {"host": "colette", "week": week, "img": lambda u: "", "notes": [], "facts": {"streams": 3, "hours": 9},
+           "heading": "This Week", "range": "Nov 15-21", "seed": 1, "pins": {}}
+    try:
+        plain = {"id": "c1", "type": "quote", "size": 0, "text": "Wow"}
+        assert not tall.has_figure(plain) and "<img" not in tall.document([plain], ctx)
+        withpic = dict(plain, pic=True, side="left", kind="chibi_happy", pscale=250, prot=-12, pflip=True, px=30, py=-40)
+        assert tall.has_figure(withpic)
+        doc = tall.document([withpic], ctx)
+        assert "translate(30px,-40px) rotate(-12deg) scale(2.50) scaleX(-1)" in doc and "left:40px" in doc
+        assert "transform-origin:50% 100%" in doc
+        for t in ("header", "stats", "grid", "host", "footer", "hero"):     # every type can carry one
+            c = tall.new_chunk(t, [], pic=True)
+            assert tall.has_figure(c) and "transform:translate(0px,0px) rotate(0deg) scale(1.00)" in tall.document([c], ctx), t
+        # numbers out of range are pulled in; nonsense falls back to the default
+        assert tall._num({"pscale": 9999}, "pscale") == 400 and tall._num({"prot": "x"}, "prot") == 0
+        # inside the chunk it is cut off at the chunk's edges; "stick out" moves it to the layer over everything
+        foot = tall.new_chunk("footer", [plain], pscale=200, size=0)
+        small, big = tall.figure(dict(foot, pscale=100), dict(ctx, theme={}), 260), tall.figure(foot, dict(ctx, theme={}), 260)
+        assert big["room"] == 2 * small["room"] and big["w"] == small["w"]      # a bigger host pushes the bubble aside
+        doc = tall.document([plain, foot], ctx)
+        assert doc.index("<img") < doc.index("z-index:100")
+        doc = tall.document([plain, dict(foot, ppop=True)], ctx)
+        layer = doc[doc.index("z-index:100"):]
+        assert "<img" in layer and f"top:{170 + 260 - (260 - 30)}px" in layer        # standing on its chunk's bottom edge
+        assert tall.total([plain, foot]) == 170 + 260                               # the picture never changes the height
+        # hashtags at the end of a stream title are dropped unless ticked
+        t = SimpleNamespace(name="Ashe", game="", title="tanks and vibes #FlaVR #vtuber", at=0, end=None, kind="scheduled",
+                            thumb="", avatar="", length=0)
+        w2 = SimpleNamespace(days=[[t]], day_name=lambda i: "MON", tz=None)
+        import flavrpromo.tall as tl
+        clock, tl.clock = tl.clock, lambda at, tz: "7 PM"
+        try:
+            s = {"id": "c1", "type": "stream", "size": 1, "ref": "d0:0"}
+            assert "#FlaVR" not in tall.document([s], dict(ctx, week=w2)) and "tanks and vibes" in tall.document([s], dict(ctx, week=w2))
+            assert "#FlaVR" in tall.document([dict(s, show=["title", "hashtags"])], dict(ctx, week=w2))
+        finally:
+            tl.clock = clock
+    finally:
+        hosts.init(None)
+
+
+async def test_builder_saves_the_picture_controls(tmp_path):
+    hosts.init(tmp_path / "pics")
+    poster = _poster(tmp_path)
+    poster.store.put("hosts_only", "colette")
+    try:
+        async with _client(poster, article_editor.add_routes, tall_page.add_routes) as c:
+            await c.get("/settings/article?group=flavr&which=week")
+            dkey = article_editor.draft_key("flavr", "week")
+            p = poster.store.get(dkey)
+            data = {"d": dkey, "action": "add_tall", **{f"on_{s['id']}": "1" for s in p["sections"]}}
+            await c.post("/settings/article", data=data, allow_redirects=False)
+
+            async def build(**extra):
+                r = await c.post("/settings/tall", data={"d": dkey, "t": "tall1", "action": "save", **extra}, allow_redirects=False)
+                assert r.status == 303
+                return poster.store.get(dkey)["talls"]["tall1"]["chunks"]
+
+            page = await (await c.get(f"/settings/tall?d={dkey}&t=tall1")).text()
+            assert "c2__pscale" in page and "Mirror" in page and "c1__pic" in page and "c1__pscale" not in page
+            # the host moment's picture: bigger, turned, mirrored, sticking out; silly numbers are pulled in
+            ch = await build(c2__figed="1", c2__pscale="180", c2__prot="-15", c2__pflip="1", c2__ppop="1", c2__px="5000",
+                             c1__title="T")
+            assert (ch[1]["pscale"], ch[1]["prot"], ch[1]["pflip"], ch[1]["ppop"], ch[1]["px"]) == (180, -15, True, True, 1600)
+            # a partial post (no tick boxes on the page) keeps the mirror; a full one without it clears it
+            ch = await build(c2__pscale="150", c1__title="T")
+            assert ch[1]["pflip"] is True and ch[1]["pscale"] == 150
+            ch = await build(c2__figed="1", c2__pscale="150", c1__title="T")
+            assert ch[1]["pflip"] is False and ch[1]["ppop"] is False
+            # the header (optional picture): tick it, then its menus and numbers show and save
+            ch = await build(c1__figed="1", c1__pic="1", c1__title="T")
+            assert ch[0]["pic"] is True
+            page = await (await c.get(f"/settings/tall?d={dkey}&t=tall1")).text()
+            assert "c1__pscale" in page and "c1__kind" in page
+            ch = await build(c1__figed="1", c1__pic="1", c1__kind="chibi_pointing", c1__side="left", c1__pscale="60", c1__title="T")
+            assert ch[0]["kind"] == "chibi_pointing" and ch[0]["side"] == "left" and ch[0]["pscale"] == 60
+            await c.get(f"/settings/tall/picture?d={dkey}&t=tall1")
+            assert "scale(0.60)" in poster.shooter.docs[-1] and "scale(1.50)" in poster.shooter.docs[-1]
+    finally:
+        hosts.init(None)

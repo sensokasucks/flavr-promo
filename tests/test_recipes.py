@@ -19,6 +19,11 @@ class FakeKobold:
         self.asked.append((key, ask, facts))
         return self.answer
 
+    async def lines(self, key, ask, heading, facts, n=0):
+        """The ✨ on a chunk: a few alternatives (kobold.Kobold.lines makes one request per line)."""
+        self.asked.append((key, ask, facts))
+        return [self.answer, "Second take.", "Third take."]
+
 
 def test_long_lists_split_into_pictures_that_fit():
     items = [{"type": "stream", "ref": f"d0:{n}", "line": ""} for n in range(14)]
@@ -122,7 +127,14 @@ async def test_recipes_build_sections_and_kobold_writes_remarks_from_the_facts(t
 
             # ✨ one game chunk: asked with THAT game's facts, in the chunk's host's voice
             ch = await build("tall1", "ai:c2")
-            assert ch[1]["line"] == "A cosy one."
+            assert ch[1]["line"] == "A cosy one." and ch[1]["choices"] == ["A cosy one.", "Second take.", "Third take."]
+            builder = await (await c.get(f"/settings/tall?d={dkey}&t=tall1")).text()
+            assert "c2__choice" in builder and "Third take." in builder
+            # picking another choice puts it in; typing in the box at the same time wins over the radio
+            ch = await build("tall1", "save", c2__choice="2", c2__line="A cosy one.", c2__game=games[0]["game"])
+            assert ch[1]["line"] == "Third take."
+            ch = await build("tall1", "save", c2__choice="1", c2__line="My own words.", c2__game=games[0]["game"])
+            assert ch[1]["line"] == "My own words."
             key, ask, facts = kob.asked[-1]
             assert key == "colette" and ask == recipes.kobold.asks()["game"]
             assert games[0]["game"] in facts and "Puzzle" in facts and "Solve things." in facts
@@ -152,7 +164,7 @@ async def test_recipes_build_sections_and_kobold_writes_remarks_from_the_facts(t
             ch = await build("tall1", "ai:c2")
             # no model: the page still renders and the picture is drawn with the game chunks
             await c.get(f"/settings/tall/picture?d={dkey}&t=tall1")
-            assert "A cosy one." in poster.shooter.docs[-1] and "Puzzle" in poster.shooter.docs[-1]
+            assert "My own words." in poster.shooter.docs[-1] and "Puzzle" in poster.shooter.docs[-1]
             assert poster.shooter.sizes[-1][1] == tall.total(ch)
     finally:
         hosts.init(None)

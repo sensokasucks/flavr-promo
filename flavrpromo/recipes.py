@@ -12,7 +12,7 @@ Each picture is at most tall.MAX_H px tall (X shows no more); a long list is spl
 pictures of balanced size, each its own section of the article. The result is ordinary chunks: the
 owner edits them afterwards in the tall picture builder (flavrpromo/tall_page.py) like any stack.
 
-The remarks (KoboldCpp): ``write_line`` writes one chunk's remark from THAT stream's or game's facts
+The remarks (KoboldCpp): ``write_choices`` (the ✨ on a chunk: a few to pick from) and ``write_line`` (one) write a chunk's remark from THAT stream's or game's facts
 (``stream_facts`` / ``game_facts``: person, game, day and time, length, platforms, title, genre, what
 the game is, history tag), and ``start_lines`` writes every empty remark of a picture in the
 background, one request each (the pattern of flavrpromo/host_picker.py ``start_ai``). What it is
@@ -142,6 +142,25 @@ async def write_line(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any
     return new, "✨ Wrote the remark."
 
 
+async def write_choices(poster: Any, p: Dict[str, Any], week: Any, c: Dict[str, Any]) -> Tuple[List[str], str]:
+    """✨ on one chunk (owner 2026-11-22: several to pick from, as the host lines work): (lines, note for the
+    page). As many requests as the settings page's "lines per slot" (kobold.Kobold.per_slot); the builder
+    lists them under the remark and picks the first."""
+    kob = getattr(poster, "kobold", None)
+    if kob is None:
+        return [], "KoboldCpp isn't set up (Settings → KoboldCpp)."
+    facts = chunk_facts(poster.store, p, week, c)
+    if not facts:
+        return [], "Pick a stream or game for that chunk first."
+    host = c.get("host") if c.get("host") in hosts.HOSTS else p["host"]
+    new = await kob.lines(host, kobold.asks()[c["type"]], host_picker.heading_of(p, "review"), facts)
+    if new is None:
+        return [], "KoboldCpp couldn't be reached."
+    if not new:
+        return [], f"KoboldCpp answered, but with no usable line. Try again. Its answer: {kob.last_raw[:200]}"
+    return new, f"✨ {len(new)} remark{'' if len(new) == 1 else 's'} to pick from (the first is in)."
+
+
 def start_lines(poster: Any, dkey: str, tid: str, week: Any) -> bool:
     """Write every empty remark of tall picture ``tid`` in the background; False when KoboldCpp isn't
     set up or is already writing for this picture."""
@@ -242,6 +261,9 @@ def build(recipe: str, p: Dict[str, Any], week: Any, arg: str = "", diagonal: bo
     if not refs:
         return [], "No streams for that choice."
     items = [{"type": "stream", "ref": r, "line": "", "host": "", "kind": "happy", "var": ""} for r, _ in refs]
+    if recipe == "person":                            # their name is the header: not again on every stream
+        for x in items:
+            x["show"] = [k for k in tall.DEFAULT_SHOW["stream"] if k != "name"]
     return _pictures(title, [sub], items, diagonal), ""
 
 
@@ -287,5 +309,5 @@ def add_to_draft(p: Dict[str, Any], built: List[Tuple[str, List[Dict[str, Any]]]
     return ids
 
 
-__all__ = ["RECIPES", "build", "fill", "people", "add_to_draft", "write_line", "start_lines", "game_rows", "drawing_context",
+__all__ = ["RECIPES", "build", "fill", "people", "add_to_draft", "write_line", "write_choices", "start_lines", "game_rows", "drawing_context",
            "chunk_facts", "stream_facts", "game_facts", "AI_STATES", "LINE_TYPES", "next_tall_id"]

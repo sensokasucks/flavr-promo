@@ -61,8 +61,13 @@ ASKS = {
     # the article editor's day pictures (flavrpromo/article_editor.py ``ask_slot``; the facts are that day's)
     "day": "Write one line for this day's picture about who streams and when (one to three sentences).",
     # the tall pictures' stream and game chunks (flavrpromo/recipes.py ``write_line``; the facts are that stream's / game's)
-    "stream": "Write one short remark about this stream for its spot in the picture (one or two sentences).",
-    "game": "Write one short remark about this game being played this week (one or two sentences).",
+    # (owner's first try 2026-11-22: the model just read the facts back, "X spent over four hours on YouTube
+    # playing ..."; the name, day, length and title are printed next to the remark, so it is told to react instead)
+    "stream": "Write one short reaction to this stream in your own voice (one or two sentences): a joke, a cheer or "
+              "what made it fun. Do not repeat the streamer's name, the day, the length, the platform or the title; "
+              "they are already printed next to your line.",
+    "game": "Write one short reaction to this game being played this week, in your own voice (one or two sentences). "
+            "Do not list who played it or how many streams; that is already printed next to your line.",
 }
 
 
